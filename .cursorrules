@@ -1,0 +1,95 @@
+**Project Description: Nostr Hierarchical List Manager (Client-Side)**
+
+**Version:** 1.1
+**Date:** April 6, 2025
+
+**1. Introduction & Vision**
+
+Nostr's decentralized nature allows users to follow profiles and events, but managing large amounts of information, curated lists, and relationships can become challenging. NIP-51 provides a standard for creating lists (e.g., mutes, pins, follows, bookmarks), but lacks explicit support for hierarchical organization.
+
+This project aims to build a **purely client-side web application** that empowers Nostr users to create, manage, and browse **hierarchical lists** based on NIP-51. Users will be able to organize their Nostr world by nesting lists within other lists, containing references to user profiles (npubs), notes/events, and crucially, other lists via stable coordinates. The application will run entirely in the user's browser, interacting directly with Nostr relays via NDK and leveraging browser extensions for key management (NIP-07). The focus is on user control, data ownership (via signed Nostr events), and a modern, fast user experience.
+
+**2. Goals**
+
+* Provide an intuitive interface for creating and managing NIP-51 lists (Sets and Standard Lists).
+* Enable users to organize these lists hierarchically by referencing lists within other lists using stable coordinates.
+* Offer a clear and performant Tree View for Browse nested list structures.
+* Operate entirely client-side, with no backend required beyond serving static files.
+* Ensure data persistence through standard, signed Nostr events published to user-configured relays.
+* Deliver a modern, responsive, and fast UI/UX.
+* Lay the groundwork for supporting both public and private list items.
+
+**3. Target Audience (Users)**
+
+* Active Nostr users looking for better ways to organize followed profiles, bookmarked notes, projects, or communities.
+* Content curators who want to create structured lists of resources or recommendations.
+* Users who manage multiple sets of follows, mutes, or bookmarks and desire better organization.
+
+**4. Core Features (MVP & Planned Scope)**
+
+* **NIP-07 Integration:** Authenticate/login via NIP-07 compatible browser extensions to get the user's public key and enable event signing.
+* **Relay Configuration:** Allow users to specify the list of Nostr relays the application should connect to via NDK.
+* **NIP-51 List Creation/Editing:**
+    * Support creating/editing NIP-51 Sets (e.g., Kind 30000 Follow Set, Kind 30003 Bookmark Set), including setting the unique `d` tag identifier and optional `title`.
+    * Support viewing/editing standard lists (e.g., Kind 10000 Mute List).
+    * Add/remove **public** items ('p' tags for npubs, 'e' tags for notes/event IDs) to lists.
+* **Hierarchical Organization:**
+    * Organize lists hierarchically: Add references to other NIP-51 list events as items within a list using **'a' tags (event coordinates)**, specifying `kind:pubkey:dTagIdentifier` (where `dTagIdentifier` is used for Sets, Kind 3xxxx). This ensures references remain valid even when the target list is updated (replaced), unlike 'e' tags for replaceable events.
+* **Hierarchical Browse:**
+    * Implement a custom Tree View component to display the nested list structure.
+    * Support expanding and collapsing parent lists (nodes) in the tree.
+    * Display list titles/identifiers in the tree nodes.
+* **List Item Display:**
+    * Within an expanded list node, display 'p' tag items with basic profile info (fetched Kind 0: avatar, name).
+    * Display 'e' tag items with basic note info (fetched Kind 1/etc: content preview).
+* **Persistence & Caching:**
+    * Publish all list creations/updates as signed NIP-51 events to user's relays via NDK.
+    * Implement client-side caching using IndexedDB to store fetched events (lists, profiles, notes) for improved performance and faster subsequent loads.
+* **Private List Items (Post-MVP):** Support for adding and viewing **private list items** (requiring NIP-04 encryption/decryption for the event's `.content` field) is a planned feature but deferred post-MVP for initial simplicity.
+
+**5. Technical Stack**
+
+* **Framework:** SvelteKit
+* **Nostr Library:** Nostr Dev Kit (NDK)
+* **Styling:** Tailwind CSS
+* **UI Toolkit:** Skeleton (for themes, layout, basic components, Tailwind integration)
+* **State Management:** Svelte Stores (built-in)
+* **Key Management:** NIP-07 Browser Extensions (Primary method)
+* **Storage (Persistence):** User's configured Nostr Relays (via NIP-51 events)
+* **Storage (Caching):** Browser IndexedDB
+
+**6. Architecture Overview**
+
+The application will consist of several key client-side modules:
+
+* **UI Layer:** Svelte components responsible for rendering the interface. Styled using Tailwind CSS, leveraging Skeleton for layout, themes, and basic components. Includes the custom Tree View component.
+* **Hierarchy Service:** JavaScript/TypeScript logic responsible for fetching list data (via NDK/Cache), parsing NIP-51 tags, resolving list-to-list references (via 'a' tags), building the in-memory tree structure, and managing expand/collapse state. Will implement lazy loading for performance.
+* **NDK Service:** A wrapper/manager for the NDK instance. Handles initialization, relay connections, subscriptions (if used), event fetching (`WorkspaceEvent`, `WorkspaceEvents`, `WorkspaceProfile`, resolving 'a' tag coordinates), event publishing (`event.publish()`), and integration with the NIP-07 signer and NIP-04 functions (when private items are implemented).
+* **Cache Service:** A helper module abstracting IndexedDB operations for storing and retrieving cached Nostr events (lists, profiles, notes).
+
+**7. Key Implementation Details & Challenges**
+
+* **Hierarchical Tree View:** This core UI component needs **custom development** using Svelte. It must handle recursive rendering of nodes, manage expand/collapse state efficiently, and integrate lazy loading (fetching child list data only when a node is expanded). Styling will be done using Tailwind utility classes, potentially leveraging Skeleton's design tokens/themes.
+* **NIP-51 Compliance:** Strict adherence to NIP-51 structure is crucial. Correct use of kinds (1xxxx, 3xxxx), tags ('p', 'e', **'a' for list refs**, 'd'), and replaceable event logic is required. **Support for NIP-04 encryption/decryption** (likely via NDK/NIP-07 helpers) for handling private items stored in the `.content` field is planned post-MVP.
+* **Hierarchy Logic:** The `hierarchyService` needs robust logic to parse list tags, specifically looking for **'a' tags** that represent coordinates (`kind:pubkey:dTag?`) to other NIP-51 list events. It must resolve these coordinates and fetch the referenced lists recursively via NDK/Cache, build the tree, and prevent infinite loops from circular references (e.g., implement a max depth limit).
+* **Performance:** Lazy loading of list content upon expansion is critical. Effective IndexedDB caching strategy is needed to minimize redundant fetches from relays. Consider virtualization for the tree view *if* performance becomes an issue with very large/deep structures (post-MVP).
+* **NIP-07 Flow:** Ensure a smooth user experience for connecting via NIP-07 and handling potential errors (extension not installed, user rejection). Ensure necessary permissions (`nip04_encrypt`/`nip04_decrypt`) are requested when implementing private items.
+
+**8. Getting Started (Initial Setup)**
+
+1.  Scaffold project: `npm create svelte@latest my-nostr-lister` (use Skeleton template).
+2.  Install dependencies: `npm install`
+3.  Add Tailwind: `npx svelte-add@latest tailwindcss` (if not included in template).
+4.  Install NDK: `npm install @nostr-dev-kit/ndk`
+5.  Configure Skeleton theme/plugins in `tailwind.config.cjs` and `app.html`.
+6.  Begin implementing NIP-07 connection and basic NDK fetching.
+
+**9. Future Considerations (Post-MVP)**
+
+* Implement Private List Item support (NIP-04).
+* Search/filtering within the list hierarchy.
+* Drag-and-drop interface for reordering lists/items.
+* Real-time updates via NDK subscriptions.
+* More sophisticated item previews (e.g., link previews, image previews).
+* Alternative view modes (e.g., Miller Columns).
+* Import/Export functionality.
