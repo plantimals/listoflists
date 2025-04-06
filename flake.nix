@@ -18,7 +18,7 @@
 
         # --- Configuration ---
         # Choose Node.js major version (LTS versions like 20 or 22 are good choices for 2025)
-        nodejsMajorVersion = 20;
+        nodejsMajorVersion = 22;
         # Choose your preferred Node.js package manager
         # pnpm is recommended for efficiency
         packageManager = pkgs.pnpm;
@@ -28,8 +28,10 @@
         # List of packages needed in the development environment
         devPackages = with pkgs; [
           # Node.js runtime (select specific major version)
-          (nodejs-${toString nodejsMajorVersion}_x)
+          # Node.js runtime (select specific major version)
+          pkgs."nodejs_${toString nodejsMajorVersion}" # Correct syntax
 
+          # Node.js package manager
           # Node.js package manager
           packageManager
 
