@@ -51,64 +51,40 @@ export class NostrLocalDB extends Dexie {
 
 			if (event.kind >= 30000 && event.kind < 40000 && event.dTag) {
 				// Parametrized Replaceable (Kind 30k-40k with dTag)
-				existingEvent = await this.events
-					.where('[kind+pubkey+dTag]')
-					.equals([event.kind, event.pubkey, event.dTag])
-					.first();
+                const key: [number, string, string] = [event.kind, event.pubkey, event.dTag];
+				existingEvent = await this.events.where('[kind+pubkey+dTag]').equals(key).first();
 			} else if (event.kind === 0 || event.kind === 3 || (event.kind >= 10000 && event.kind < 20000) ) {
                 // Standard Replaceable (Kind 0, 3, 10k-20k)
-				existingEvent = await this.events
-					.where('[kind+pubkey]')
-					.equals([event.kind, event.pubkey])
-					.first();
+                const key: [number, string] = [event.kind, event.pubkey];
+				existingEvent = await this.events.where('[kind+pubkey]').equals(key).first();
 			} else {
-                // Fallback for replaceable kinds without a clear identifier strategy here
-                // This case might need refinement depending on specific kind usage
-                // For now, we'll treat it like non-replaceable to avoid accidental data loss
-                // but ideally, specific strategies for these kinds should be added if used.
-                console.warn(`Replaceable event kind ${event.kind} without specific handling, using simple put.`);
+                // Fallback for other replaceable kinds - treat as non-replaceable for now.
+                console.warn(`Replaceable event kind ${event.kind} without specific coordinate handling, using simple put.`);
                 await this.events.put(event);
                 return;
             }
 
 
 			if (!existingEvent || event.created_at > existingEvent.created_at) {
-                // If no existing or new event is newer, add/update it
-                // If there are multiple older versions (e.g., due to race conditions or previous lack of dTag indexing),
-                // put will overwrite the one with the same primary key 'id' if it exists,
-                // but won't automatically delete other older versions matching the kind+pubkey+dTag.
-                // A cleanup mechanism might be needed later if old versions accumulate.
-				await this.events.put(event);
-
-                // Optional: Clean up older versions matching the same replaceable key
-                // This adds complexity but ensures only the latest remains.
-                // Example cleanup (use with caution, consider performance impact):
-                /*
-                if (existingEvent && event.id !== existingEvent.id) { // Only if the ID is different (meaning we replaced)
-                    let olderEventsQuery;
-                    if (event.kind >= 30000 && event.kind < 40000 && event.dTag) {
-                         olderEventsQuery = this.events
-                            .where('[kind+pubkey+dTag]')
-                            .equals([event.kind, event.pubkey, event.dTag])
-                    } else {
-                         olderEventsQuery = this.events
-                            .where('[kind+pubkey]')
-                            .equals([event.kind, event.pubkey])
+                // If no existing event, or the new event is strictly newer...
+                await this.transaction('rw', this.events, async () => {
+                    if (existingEvent) {
+                        await this.events.delete(existingEvent.id);
                     }
-                    const olderEvents = await olderEventsQuery.toArray();
-                    const idsToDelete = olderEvents
-                        .filter(e => e.id !== event.id && e.created_at < event.created_at)
-                        .map(e => e.id);
-                    if (idsToDelete.length > 0) {
-                        await this.events.bulkDelete(idsToDelete);
-                    }
+                    await this.events.put(event);
+                });
+			} else if (event.created_at === existingEvent.created_at) {
+                // Timestamps are identical. Keep the one with the lexicographically smaller ID.
+                if (event.id < existingEvent.id) {
+                    await this.transaction('rw', this.events, async () => {
+                        await this.events.delete(existingEvent.id);
+                        await this.events.put(event);
+                    });
                 }
-                */
-			}
-            // else: New event is older or same age, do nothing
+            }
+
 		} else {
 			// Handle Non-Replaceable Event (or regular event)
-			// put will add if new, or overwrite if ID exists (which is fine for non-replaceable)
 			await this.events.put(event);
 		}
 	}
@@ -135,7 +111,8 @@ export class NostrLocalDB extends Dexie {
 
         try {
             const profileContent = JSON.parse(profileEvent.content);
-            const newProfile: StoredProfile = {
+            // Renamed to avoid conflict with the 'profile' property name
+            const newProfileData: StoredProfile = {
                 pubkey: profileEvent.pubkey,
                 profile: profileContent,
                 created_at: profileEvent.created_at
@@ -143,20 +120,24 @@ export class NostrLocalDB extends Dexie {
 
             const existingProfile = await this.profiles.get(profileEvent.pubkey);
 
-            if (!existingProfile || newProfile.created_at > existingProfile.created_at) {
-                // Update the dedicated profiles table
-                await this.profiles.put(newProfile);
-                // ALSO update the main events table using the standard logic
-                await this.addOrUpdateEvent(profileEvent);
-            } else if (newProfile.created_at === existingProfile.created_at) {
-                // Timestamps match, ensure the event corresponding to the *existing* profile is in the events table
-                // This handles the case where the profile table was populated first/separately
-                const existingEvent = await this.getEventById(existingProfile.profile?.id); // Assuming profile might store original event ID if needed
-                 // Or, more simply, just try to add the current event if timestamps match,
-                 // addOrUpdateEvent logic will handle keeping the existing one if appropriate.
-                await this.addOrUpdateEvent(profileEvent);
+            let shouldUpdateEventStore = false;
+
+            if (!existingProfile || newProfileData.created_at > existingProfile.created_at) {
+                // Update the dedicated profiles table if newer or non-existent
+                await this.profiles.put(newProfileData);
+                shouldUpdateEventStore = true;
+            } else if (existingProfile && newProfileData.created_at === existingProfile.created_at) {
+                 // Timestamps match. Let addOrUpdateEvent handle the tie-break based on event ID.
+                 // We still need to call it to ensure consistency or apply tie-breaking.
+                 shouldUpdateEventStore = true;
             }
-            // If the new event is older, we do nothing for both tables.
+            // else: New event is older, do nothing for profiles table.
+
+            // If the profile was updated OR timestamps matched, ensure the event store is consistent.
+            if (shouldUpdateEventStore) {
+                 // *** Ensure the underlying Kind 0 event is also processed ***
+                 await this.addOrUpdateEvent(profileEvent);
+            }
 
         } catch (e) {
             console.error("Failed to parse or store profile:", profileEvent, e);
@@ -173,41 +154,28 @@ export class NostrLocalDB extends Dexie {
         let query;
         if (dTag && kind >= 30000 && kind < 40000) {
             // Parametrized: Use [kind+pubkey+dTag] index
-            query = this.events.where('[kind+pubkey+dTag]').equals([kind, pubkey, dTag]);
+            const key: [number, string, string] = [kind, pubkey, dTag];
+            query = this.events.where('[kind+pubkey+dTag]').equals(key);
         } else if (isReplaceableKind(kind)) {
-            // Standard Replaceable: Use [kind+pubkey] index
-            query = this.events.where('[kind+pubkey]').equals([kind, pubkey]);
+             // Standard Replaceable: Use [kind+pubkey] index
+             const key: [number, string] = [kind, pubkey];
+            query = this.events.where('[kind+pubkey]').equals(key);
         } else {
             console.warn(`getLatestEventByCoord called for non-replaceable kind: ${kind}`);
             return undefined;
         }
-
-        // Use the .last() method which leverages the index to efficiently find the latest item
-        // The index [kind+pubkey+created_at] or [kind+pubkey+dTag+created_at]
-        // isn't explicitly defined, but Dexie can use compound indexes for prefixes.
-        // Ordering by created_at should be implicitly handled by the index when using .last()
-        // IF the index correctly includes created_at as the last component for sorting.
-        // Let's redefine the indexes slightly to ensure this.
-
-        // NOTE: The schema should be updated for this to be most efficient:
-        // 'id, kind, pubkey, created_at, [kind+pubkey+created_at], [kind+pubkey+dTag+created_at]'
-        // However, Dexie might be smart enough with the existing [kind+pubkey] and [kind+pubkey+dTag]
-        // and just sorting the results of the .equals() match.
-
+        // Use the .last() method. Dexie sorts compound keys, so .last() on a query
+        // using '[kind+pubkey]' or '[kind+pubkey+dTag]' should work even without created_at
+        // explicitly in the index name, as it finds the matching range and gets the last primary key within it.
+        // If performance becomes an issue, add created_at to the index definitions.
         try {
-             // Attempt to get the last item based on the index used in the query
-             // This assumes the underlying index is ordered correctly (implicitly by created_at if it's the last part or by Dexie's internal handling)
-             const latest = await query.last();
-             return latest;
+            // Attempt to get the last item based on the index used in the query
+            const latest = await query.last(); // .last() is efficient with indexed lookups
+            return latest;
         } catch (error) {
              console.error("Error fetching latest event by coordinate:", { kind, pubkey, dTag }, error);
              return undefined;
         }
-
-        /* Old implementation using sortBy + reverse emulation:
-        const results = await query.sortBy('created_at');
-        return results[results.length - 1]; // Get the last item after ascending sort
-        */
     }
 
     async getEventsByKindAuthor(kind: number, pubkey: string, limit?: number): Promise<StoredEvent[]> {
