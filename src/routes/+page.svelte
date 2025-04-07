@@ -285,20 +285,23 @@
       try {
           // --- Part 1: Fetch and Store Incoming Events --- 
           console.log("Sync Phase 1: Fetching incoming events...");
-          // 1. Determine 'since' timestamp (Corrected Linter Error)
-          const sortedEvents = await localDb.events
-              .where({ pubkey: userPubkey })
-              .sortBy('created_at');
-          const latestEvent = sortedEvents.length > 0 ? sortedEvents[sortedEvents.length - 1] : undefined;
+          // 1. Determine 'since' timestamp (Reverting to fetching all and sorting)
+          // Use Promise.all to fetch all relevant event and profile data concurrently
+          const [allUserEvents, allUserProfiles] = await Promise.all([
+             localDb.events.where({ pubkey: userPubkey }).toArray(),
+             localDb.profiles.where({ pubkey: userPubkey }).toArray()
+          ]);
 
-          const sortedProfiles = await localDb.profiles
-              .where({ pubkey: userPubkey })
-              .sortBy('created_at');
-          const latestProfile = sortedProfiles.length > 0 ? sortedProfiles[sortedProfiles.length - 1] : undefined;
+          // Sort in code to find the latest
+          allUserEvents.sort((a, b) => b.created_at - a.created_at);
+          allUserProfiles.sort((a, b) => b.created_at - a.created_at);
+
+          const latestEventResult = allUserEvents[0]; // Undefined if array is empty
+          const latestProfileResult = allUserProfiles[0]; // Undefined if array is empty
 
           const latestLocalTimestamp = Math.max(
-              latestEvent?.created_at || 0,
-              latestProfile?.created_at || 0
+              latestEventResult?.created_at || 0,
+              latestProfileResult?.created_at || 0
           );
 
           // Fetch events strictly newer than the latest we have locally
@@ -361,9 +364,9 @@
           }
           console.log("Sync Phase 1 Complete.");
 
-          // --- Part 2: Publish Outgoing Events --- 
+          // --- Part 2: Publish Outgoing Events (L6.2) --- 
           console.log("Sync Phase 2: Publishing outgoing events...");
-          const unpublishedEvents = await localDb.getUnpublishedEvents(userPubkey);
+          const unpublishedEvents: StoredEvent[] = await localDb.getUnpublishedEvents(userPubkey);
 
           if (unpublishedEvents.length > 0) {
              console.log(`Attempting to publish ${unpublishedEvents.length} unpublished events...`);
@@ -371,38 +374,38 @@
 
              for (const storedEvent of unpublishedEvents) {
                  // Reconstruct NDKEvent from StoredEvent to publish
-                 const ndkEventToPublish = new NDKEvent(ndkInstance);
-                 ndkEventToPublish.id = storedEvent.id;
-                 ndkEventToPublish.kind = storedEvent.kind;
-                 ndkEventToPublish.pubkey = storedEvent.pubkey;
-                 ndkEventToPublish.created_at = storedEvent.created_at;
-                 ndkEventToPublish.tags = storedEvent.tags;
-                 ndkEventToPublish.content = storedEvent.content;
-                 ndkEventToPublish.sig = storedEvent.sig;
+                 const eventToPublish = new NDKEvent(ndkInstance);
+                 eventToPublish.id = storedEvent.id;
+                 eventToPublish.kind = storedEvent.kind;
+                 eventToPublish.pubkey = storedEvent.pubkey;
+                 eventToPublish.created_at = storedEvent.created_at;
+                 eventToPublish.tags = storedEvent.tags;
+                 eventToPublish.content = storedEvent.content;
+                 eventToPublish.sig = storedEvent.sig;
 
                  // Sanity check: Ensure event has a signature before publishing
-                 if (!ndkEventToPublish.sig) {
-                     console.warn(`Skipping publish for event ${ndkEventToPublish.id}: Missing signature.`);
-                     continue;
+                 if (!eventToPublish.sig) {
+                     console.warn(`Skipping publish for event ${eventToPublish.id}: Missing signature.`);
+                     continue; // Skip to the next event
                  }
 
                  try {
-                     console.log(`Publishing event ${ndkEventToPublish.id} (Kind: ${ndkEventToPublish.kind})...`);
+                     console.log(`Publishing event ${eventToPublish.id} (Kind: ${eventToPublish.kind}, Created: ${new Date(eventToPublish.created_at * 1000).toISOString()})...`);
                      // NDK's publish method sends the event to connected relays
-                     const publishedToRelays = await ndkInstance.publish(ndkEventToPublish);
+                     const publishedToRelays = await ndkInstance.publish(eventToPublish);
 
                      if (publishedToRelays.size > 0) {
-                         console.log(`Successfully published event ${ndkEventToPublish.id} to ${publishedToRelays.size} relays.`);
+                         console.log(`Successfully published event ${eventToPublish.id} to ${publishedToRelays.size} relays.`);
                          // Mark as published locally ON SUCCESS
-                         await localDb.markEventAsPublished(ndkEventToPublish.id);
+                         await localDb.markEventAsPublished(eventToPublish.id);
                          publishedCount++;
-                         refreshNeeded = true; // Published events might change UI state implicitly
+                         refreshNeeded = true; // Published events might change UI state implicitly (e.g., if a new list becomes visible)
                      } else {
-                         console.warn(`Failed to publish event ${ndkEventToPublish.id} to any relays (or NDK couldn't confirm). Will retry next sync.`);
+                         console.warn(`Failed to publish event ${eventToPublish.id} to any relays (or NDK couldn't confirm). Will retry next sync.`);
                          // Do not mark as published if it failed
                      }
                  } catch (publishErr) {
-                      console.error(`Error publishing event ${ndkEventToPublish.id}:`, publishErr);
+                      console.error(`Error publishing event ${eventToPublish.id}:`, publishErr);
                       // Do not mark as published on error
                  }
              } // end for loop
@@ -413,6 +416,7 @@
            console.log("Sync Phase 2 Complete.");
 
           // --- Part 3: Final UI Refresh (if needed) --- 
+          // Refresh if incoming events were processed OR if events were successfully published
           if (refreshNeeded) {
             console.log("Sync operations modified data, triggering final UI refresh...");
             await loadDataAndBuildHierarchy(userPubkey);

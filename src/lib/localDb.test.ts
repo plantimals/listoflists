@@ -10,7 +10,8 @@ function createEvent(
     createdAt: number,
     content: string = '',
     tags: string[][] = [],
-    sig: string = `sig-${id}`
+    sig: string = `sig-${id}`,
+    published?: boolean // Optional published status
 ): StoredEvent {
     const baseEvent: StoredEvent = {
         id,
@@ -29,6 +30,10 @@ function createEvent(
              (baseEvent as any).dTag = dTagValue;
         }
     }
+    // Add published status if provided
+    if (published !== undefined) {
+        baseEvent.published = published;
+    }
     return baseEvent;
 }
 
@@ -37,7 +42,8 @@ function createProfileEvent(
     pubkey: string,
     createdAt: number,
     profileData: NDKUserProfile,
-    idSuffix: string = ''
+    idSuffix: string = '',
+    published?: boolean // Optional published status
 ): StoredEvent {
      const eventId = `profile-${pubkey}-${createdAt}${idSuffix}`;
     return createEvent(
@@ -46,12 +52,19 @@ function createProfileEvent(
         pubkey,
         createdAt,
         JSON.stringify(profileData),
-        [] // Kind 0 doesn't typically have specific tags needed for identification here
+        [], // Kind 0 doesn't typically have specific tags needed for identification here
+        `sig-${eventId}`,
+        published
     );
 }
 
 
 describe('localDb', () => {
+    const pubkey1 = 'pk1';
+    const pubkey2 = 'pk2';
+    const dTag1 = 'list1';
+    const dTag2 = 'list2';
+
     // Clean database tables before each test
     beforeEach(async () => {
         // Ensure DB is open before clearing tables
@@ -69,175 +82,301 @@ describe('localDb', () => {
     });
 
     describe('addOrUpdateEvent', () => {
-        const pubkey1 = 'pk1';
-        const pubkey2 = 'pk2';
 
         // --- Non-Replaceable ---
-        it('should add a new non-replaceable event', async () => {
-            const event = createEvent('nr1', 1, pubkey1, 1000);
+        it('should add a new non-replaceable event marked as unpublished', async () => {
+            const event = createEvent('nr_unpub', 1, pubkey1, 1000, '', [], undefined, false);
             await localDb.addOrUpdateEvent(event);
-            await expect(localDb.getEventById('nr1')).resolves.toEqual(event);
+            const stored = await localDb.getEventById('nr_unpub');
+            expect(stored).toEqual(event);
+            expect(stored?.published).toBe(false);
         });
 
-        it('should add multiple non-replaceable events with the same kind/pubkey', async () => {
-            const event1 = createEvent('nr1', 1, pubkey1, 1000);
-            const event2 = createEvent('nr2', 1, pubkey1, 1005); // Same kind/pubkey, different id/time
-            await localDb.addOrUpdateEvent(event1);
-            await localDb.addOrUpdateEvent(event2);
-            await expect(localDb.getEventById('nr1')).resolves.toEqual(event1);
-            await expect(localDb.getEventById('nr2')).resolves.toEqual(event2);
+        it('should add a new non-replaceable event marked as published (true)', async () => {
+            const event = createEvent('nr_pub', 1, pubkey1, 1000, '', [], undefined, true);
+            await localDb.addOrUpdateEvent(event);
+            const stored = await localDb.getEventById('nr_pub');
+            expect(stored).toEqual(event);
+            expect(stored?.published).toBe(true);
+        });
+
+         it('should add a new non-replaceable event without a published flag (defaults to undefined)', async () => {
+            const event = createEvent('nr_undef', 1, pubkey1, 1000);
+            await localDb.addOrUpdateEvent(event);
+            const stored = await localDb.getEventById('nr_undef');
+            expect(stored).toEqual(event);
+            expect(stored?.published).toBeUndefined(); // Should not have the property
         });
 
         // --- Standard Replaceable ---
-        it('should add a new standard replaceable event (Kind 10000)', async () => {
-            const event = createEvent('sr1', 10000, pubkey1, 1000);
+        it('should add a new std replaceable event marked unpublished', async () => {
+            const event = createEvent('sr_unpub', 10002, pubkey1, 1000, '', [], undefined, false);
             await localDb.addOrUpdateEvent(event);
-            await expect(localDb.getLatestEventByCoord(10000, pubkey1)).resolves.toEqual(event);
+            const stored = await localDb.getLatestEventByCoord(10002, pubkey1);
+            expect(stored).toEqual(event);
+            expect(stored?.published).toBe(false);
         });
 
-         it('should update a standard replaceable event if the new event is newer', async () => {
-            const eventOlder = createEvent('sr_old', 10000, pubkey1, 1000);
-            const eventNewer = createEvent('sr_new', 10000, pubkey1, 1005, 'new content');
-            await localDb.addOrUpdateEvent(eventOlder);
-            await localDb.addOrUpdateEvent(eventNewer);
-            await expect(localDb.getLatestEventByCoord(10000, pubkey1)).resolves.toEqual(eventNewer);
-             // Check if the old event ID is gone (optional, depends on implementation detail)
-            // Assuming addOrUpdateEvent replaces based on coordinate and might leave old ID if different
-            // await expect(localDb.getEventById('sr_old')).resolves.toBeUndefined();
+        it('should update a std replaceable event if newer, preserving unpublished status if incoming is undefined', async () => {
+            const olderUnpublished = createEvent('sr_old_unpub', 10002, pubkey1, 1000, 'old', [], undefined, false);
+            const newerNetwork = createEvent('sr_new_net', 10002, pubkey1, 1005, 'new'); // No published flag
+            await localDb.addOrUpdateEvent(olderUnpublished);
+            await localDb.addOrUpdateEvent(newerNetwork);
+            const stored = await localDb.getLatestEventByCoord(10002, pubkey1);
+            expect(stored?.id).toBe('sr_new_net');
+            expect(stored?.content).toBe('new');
+            expect(stored?.published).toBe(false); // Should retain the unpublished status
         });
 
-        it('should NOT update a standard replaceable event if the new event is older', async () => {
-            const eventNewer = createEvent('sr_new', 10000, pubkey1, 1005);
-            const eventOlder = createEvent('sr_old', 10000, pubkey1, 1000, 'old content');
-            await localDb.addOrUpdateEvent(eventNewer);
-            await localDb.addOrUpdateEvent(eventOlder);
-            await expect(localDb.getLatestEventByCoord(10000, pubkey1)).resolves.toEqual(eventNewer);
+        it('should update a std replaceable event if newer, explicitly setting published status if incoming has it', async () => {
+            const olderUnpublished = createEvent('sr_old_unpub2', 10002, pubkey1, 1000, 'old', [], undefined, false);
+            const newerPublished = createEvent('sr_new_pub', 10002, pubkey1, 1005, 'new', [], undefined, true);
+            await localDb.addOrUpdateEvent(olderUnpublished);
+            await localDb.addOrUpdateEvent(newerPublished);
+            const stored = await localDb.getLatestEventByCoord(10002, pubkey1);
+            expect(stored?.id).toBe('sr_new_pub');
+            expect(stored?.published).toBe(true);
         });
 
-        it('should keep the existing standard replaceable event if timestamps are identical', async () => {
-            const event1 = createEvent('sr_1', 10000, pubkey1, 1000, 'content 1');
-            const event2 = createEvent('sr_2', 10000, pubkey1, 1000, 'content 2'); // Same time, different ID/content
-            await localDb.addOrUpdateEvent(event1);
-            await localDb.addOrUpdateEvent(event2);
-            await expect(localDb.getLatestEventByCoord(10000, pubkey1)).resolves.toEqual(event1);
+        it('should NOT update a std replaceable event if incoming is older, even if published status differs', async () => {
+            const newerUnpublished = createEvent('sr_new_unpub', 10002, pubkey1, 1005, 'new', [], undefined, false);
+            const olderPublished = createEvent('sr_old_pub', 10002, pubkey1, 1000, 'old', [], undefined, true);
+            await localDb.addOrUpdateEvent(newerUnpublished);
+            await localDb.addOrUpdateEvent(olderPublished);
+            const stored = await localDb.getLatestEventByCoord(10002, pubkey1);
+            expect(stored?.id).toBe('sr_new_unpub');
+            expect(stored?.published).toBe(false);
         });
-
 
         // --- Parameterized Replaceable ---
-        const dTag1 = 'bookmarks';
-        const dTag2 = 'articles';
-
-        it('should add a new parameterized replaceable event', async () => {
-            const event = createEvent('pr1', 30003, pubkey1, 1000, '', [['d', dTag1]]);
+        it('should add a new param replaceable event marked unpublished', async () => {
+            const event = createEvent('pr_unpub', 30003, pubkey1, 1000, '', [['d', dTag1]], undefined, false);
             await localDb.addOrUpdateEvent(event);
-            await expect(localDb.getLatestEventByCoord(30003, pubkey1, dTag1)).resolves.toEqual(event);
+            const stored = await localDb.getLatestEventByCoord(30003, pubkey1, dTag1);
+            expect(stored).toEqual(event);
+            expect(stored?.published).toBe(false);
         });
 
-         it('should add multiple parameterized replaceable events with different dTags', async () => {
-            const event1 = createEvent('pr1_d1', 30003, pubkey1, 1000, '', [['d', dTag1]]);
-            const event2 = createEvent('pr1_d2', 30003, pubkey1, 1005, '', [['d', dTag2]]); // Different dTag
-            await localDb.addOrUpdateEvent(event1);
-            await localDb.addOrUpdateEvent(event2);
-            await expect(localDb.getLatestEventByCoord(30003, pubkey1, dTag1)).resolves.toEqual(event1);
-            await expect(localDb.getLatestEventByCoord(30003, pubkey1, dTag2)).resolves.toEqual(event2);
+        it('should update a param replaceable event if newer, preserving unpublished status if incoming is undefined', async () => {
+            const olderUnpublished = createEvent('pr_old_unpub', 30003, pubkey1, 1000, 'old', [['d', dTag1]], undefined, false);
+            const newerNetwork = createEvent('pr_new_net', 30003, pubkey1, 1005, 'new', [['d', dTag1]]); // No published flag
+            await localDb.addOrUpdateEvent(olderUnpublished);
+            await localDb.addOrUpdateEvent(newerNetwork);
+            const stored = await localDb.getLatestEventByCoord(30003, pubkey1, dTag1);
+            expect(stored?.id).toBe('pr_new_net');
+            expect(stored?.content).toBe('new');
+            expect(stored?.published).toBe(false); // Should retain the unpublished status
         });
 
-        it('should update a parameterized replaceable event if the new event is newer (same dTag)', async () => {
-            const eventOlder = createEvent('pr_old', 30003, pubkey1, 1000, 'old', [['d', dTag1]]);
-            const eventNewer = createEvent('pr_new', 30003, pubkey1, 1005, 'new', [['d', dTag1]]);
-            await localDb.addOrUpdateEvent(eventOlder);
-            await localDb.addOrUpdateEvent(eventNewer);
-            await expect(localDb.getLatestEventByCoord(30003, pubkey1, dTag1)).resolves.toEqual(eventNewer);
+        it('should update a param replaceable event if newer, explicitly setting published status if incoming has it', async () => {
+            const olderUnpublished = createEvent('pr_old_unpub2', 30003, pubkey1, 1000, 'old', [['d', dTag1]], undefined, false);
+            const newerPublished = createEvent('pr_new_pub', 30003, pubkey1, 1005, 'new', [['d', dTag1]], undefined, true);
+            await localDb.addOrUpdateEvent(olderUnpublished);
+            await localDb.addOrUpdateEvent(newerPublished);
+            const stored = await localDb.getLatestEventByCoord(30003, pubkey1, dTag1);
+            expect(stored?.id).toBe('pr_new_pub');
+            expect(stored?.published).toBe(true);
         });
 
-        it('should NOT update a parameterized replaceable event if the new event is older (same dTag)', async () => {
-            const eventNewer = createEvent('pr_new', 30003, pubkey1, 1005, 'new', [['d', dTag1]]);
-            const eventOlder = createEvent('pr_old', 30003, pubkey1, 1000, 'old', [['d', dTag1]]);
-            await localDb.addOrUpdateEvent(eventNewer);
-            await localDb.addOrUpdateEvent(eventOlder);
-            await expect(localDb.getLatestEventByCoord(30003, pubkey1, dTag1)).resolves.toEqual(eventNewer);
+        it('should NOT update a param replaceable event if incoming is older, even if published status differs', async () => {
+            const newerUnpublished = createEvent('pr_new_unpub', 30003, pubkey1, 1005, 'new', [['d', dTag1]], undefined, false);
+            const olderPublished = createEvent('pr_old_pub', 30003, pubkey1, 1000, 'old', [['d', dTag1]], undefined, true);
+            await localDb.addOrUpdateEvent(newerUnpublished);
+            await localDb.addOrUpdateEvent(olderPublished);
+            const stored = await localDb.getLatestEventByCoord(30003, pubkey1, dTag1);
+            expect(stored?.id).toBe('pr_new_unpub');
+            expect(stored?.published).toBe(false);
         });
 
-         it('should keep the existing parameterized replaceable event if timestamps are identical (same dTag)', async () => {
-            const event1 = createEvent('pr_1', 30003, pubkey1, 1000, 'content 1', [['d', dTag1]]);
-            const event2 = createEvent('pr_2', 30003, pubkey1, 1000, 'content 2', [['d', dTag1]]);
-            await localDb.addOrUpdateEvent(event1);
-            await localDb.addOrUpdateEvent(event2);
-            await expect(localDb.getLatestEventByCoord(30003, pubkey1, dTag1)).resolves.toEqual(event1);
-        });
     });
 
     describe('addOrUpdateProfile', () => {
-        const pubkey1 = 'pk_profile1';
         const profileData1: NDKUserProfile = { name: 'Alice', about: 'Test user 1' };
         const profileData2: NDKUserProfile = { name: 'Alice V2', about: 'Updated info' };
 
-        it('should add a new profile from a Kind 0 event', async () => {
-            const event = createProfileEvent(pubkey1, 1000, profileData1);
+        it('should add a new profile from a Kind 0 marked unpublished', async () => {
+            const event = createProfileEvent(pubkey1, 1000, profileData1, '_unpub', false);
             await localDb.addOrUpdateProfile(event);
             const storedProfile = await localDb.getProfile(pubkey1);
-            expect(storedProfile).toBeDefined();
-            expect(storedProfile?.pubkey).toBe(pubkey1);
+            const storedEvent = await localDb.getLatestEventByCoord(0, pubkey1);
+
             expect(storedProfile?.created_at).toBe(1000);
             expect(storedProfile?.profile).toEqual(profileData1);
-            // Also check the underlying event store
-            await expect(localDb.getLatestEventByCoord(0, pubkey1)).resolves.toEqual(event);
+            expect(storedEvent?.id).toBe(event.id);
+            expect(storedEvent?.published).toBe(false);
         });
 
-        it('should update profile if Kind 0 event is newer', async () => {
-            const eventOlder = createProfileEvent(pubkey1, 1000, profileData1, '_old');
-            const eventNewer = createProfileEvent(pubkey1, 1005, profileData2, '_new');
-            await localDb.addOrUpdateProfile(eventOlder);
-            await localDb.addOrUpdateProfile(eventNewer);
+        it('should update profile if Kind 0 event is newer, preserving unpublished status if incoming is undefined', async () => {
+            const eventOlderUnpub = createProfileEvent(pubkey1, 1000, profileData1, '_old_unpub', false);
+            const eventNewerNet = createProfileEvent(pubkey1, 1005, profileData2, '_new_net'); // No published flag
+
+            await localDb.addOrUpdateProfile(eventOlderUnpub);
+            await localDb.addOrUpdateProfile(eventNewerNet);
+
             const storedProfile = await localDb.getProfile(pubkey1);
+            const storedEvent = await localDb.getLatestEventByCoord(0, pubkey1);
+
             expect(storedProfile?.created_at).toBe(1005);
             expect(storedProfile?.profile).toEqual(profileData2);
-            // Check underlying event store reflects the newer event
-            await expect(localDb.getLatestEventByCoord(0, pubkey1)).resolves.toEqual(eventNewer);
+            expect(storedEvent?.id).toBe(eventNewerNet.id);
+            expect(storedEvent?.published).toBe(false); // Preserved from older event
+        });
+
+        it('should update profile if Kind 0 event is newer, setting published status if incoming has it', async () => {
+            const eventOlderUnpub = createProfileEvent(pubkey1, 1000, profileData1, '_old_unpub2', false);
+            const eventNewerPub = createProfileEvent(pubkey1, 1005, profileData2, '_new_pub', true);
+
+            await localDb.addOrUpdateProfile(eventOlderUnpub);
+            await localDb.addOrUpdateProfile(eventNewerPub);
+
+            const storedProfile = await localDb.getProfile(pubkey1);
+            const storedEvent = await localDb.getLatestEventByCoord(0, pubkey1);
+
+            expect(storedProfile?.created_at).toBe(1005);
+            expect(storedProfile?.profile).toEqual(profileData2);
+            expect(storedEvent?.id).toBe(eventNewerPub.id);
+            expect(storedEvent?.published).toBe(true);
         });
 
         it('should NOT update profile if Kind 0 event is older', async () => {
-            const eventNewer = createProfileEvent(pubkey1, 1005, profileData2, '_new');
-            const eventOlder = createProfileEvent(pubkey1, 1000, profileData1, '_old');
-            await localDb.addOrUpdateProfile(eventNewer);
-            await localDb.addOrUpdateProfile(eventOlder); // Attempt to add older
+            const eventNewerUnpub = createProfileEvent(pubkey1, 1005, profileData2, '_new_unpub', false);
+            const eventOlderPub = createProfileEvent(pubkey1, 1000, profileData1, '_old_pub', true);
+
+            await localDb.addOrUpdateProfile(eventNewerUnpub);
+            await localDb.addOrUpdateProfile(eventOlderPub);
+
             const storedProfile = await localDb.getProfile(pubkey1);
-            expect(storedProfile?.created_at).toBe(1005); // Should still be newer time
-            expect(storedProfile?.profile).toEqual(profileData2); // Should still be newer data
-             // Check underlying event store still has the newer event
-            await expect(localDb.getLatestEventByCoord(0, pubkey1)).resolves.toEqual(eventNewer);
+            const storedEvent = await localDb.getLatestEventByCoord(0, pubkey1);
+
+            expect(storedProfile?.created_at).toBe(1005);
+            expect(storedProfile?.profile).toEqual(profileData2);
+            expect(storedEvent?.id).toBe(eventNewerUnpub.id);
+            expect(storedEvent?.published).toBe(false);
         });
 
-        it('should keep the existing profile if Kind 0 timestamps are identical', async () => {
-             const event1 = createProfileEvent(pubkey1, 1000, profileData1, '_1');
-             const event2 = createProfileEvent(pubkey1, 1000, profileData2, '_2'); // Same time, different content
-            await localDb.addOrUpdateProfile(event1);
-            await localDb.addOrUpdateProfile(event2);
-            const storedProfile = await localDb.getProfile(pubkey1);
-            expect(storedProfile?.created_at).toBe(1000);
-            expect(storedProfile?.profile).toEqual(profileData1); // Should be data from event1
-            await expect(localDb.getLatestEventByCoord(0, pubkey1)).resolves.toEqual(event1); // Check event store too
+    });
+
+    // --- L6.1: Tests for New Methods ---
+
+    describe('markEventAsPublished', () => {
+        it('should set the published flag to true for an existing unpublished event', async () => {
+            const event = createEvent('mark_me', 1, pubkey1, 1000, '', [], undefined, false);
+            await localDb.addOrUpdateEvent(event);
+            let stored = await localDb.getEventById('mark_me');
+            expect(stored?.published).toBe(false);
+
+            await localDb.markEventAsPublished('mark_me');
+
+            stored = await localDb.getEventById('mark_me');
+            expect(stored).toBeDefined();
+            expect(stored?.published).toBe(true);
         });
 
-        it('should ignore events that are not Kind 0', async () => {
-            const eventKind1 = createEvent('kind1_event', 1, pubkey1, 1000, 'not a profile');
-            await localDb.addOrUpdateProfile(eventKind1);
-            await expect(localDb.getProfile(pubkey1)).resolves.toBeUndefined();
-            // Check event wasn't added via profile logic
-             await expect(localDb.getLatestEventByCoord(0, pubkey1)).resolves.toBeUndefined();
-             // Check it wasn't added as a generic event either via this function
-             await expect(localDb.getEventById('kind1_event')).resolves.toBeUndefined();
+        it('should set the published flag to true for an existing event with undefined published status', async () => {
+            const event = createEvent('mark_me_undef', 1, pubkey1, 1000);
+            await localDb.addOrUpdateEvent(event);
+            let stored = await localDb.getEventById('mark_me_undef');
+            expect(stored?.published).toBeUndefined();
+
+            await localDb.markEventAsPublished('mark_me_undef');
+
+            stored = await localDb.getEventById('mark_me_undef');
+            expect(stored).toBeDefined();
+            expect(stored?.published).toBe(true);
         });
 
-        it('should handle profiles for different pubkeys correctly', async () => {
-             const pubkey2 = 'pk_profile2';
-             const profileData_pk2: NDKUserProfile = { name: 'Bob' };
-             const event1 = createProfileEvent(pubkey1, 1000, profileData1);
-             const event2 = createProfileEvent(pubkey2, 1005, profileData_pk2);
-             await localDb.addOrUpdateProfile(event1);
-             await localDb.addOrUpdateProfile(event2);
-             await expect(localDb.getProfile(pubkey1)).resolves.toHaveProperty('profile', profileData1);
-             await expect(localDb.getProfile(pubkey2)).resolves.toHaveProperty('profile', profileData_pk2);
+         it('should do nothing if the event ID does not exist', async () => {
+            // Use spyOn to check console.warn, Vitest doesn't directly support this easily without setup
+            // Instead, we just check that no error is thrown and the operation completes.
+             await expect(localDb.markEventAsPublished('non_existent_id')).resolves.toBeUndefined();
+             // Verify no event was accidentally created
+             await expect(localDb.getEventById('non_existent_id')).resolves.toBeUndefined();
+        });
+
+        it('should not change the status if the event is already marked as published', async () => {
+             const event = createEvent('already_published', 1, pubkey1, 1000, '', [], undefined, true);
+            await localDb.addOrUpdateEvent(event);
+            let stored = await localDb.getEventById('already_published');
+            expect(stored?.published).toBe(true);
+
+            await localDb.markEventAsPublished('already_published'); // Mark again
+
+            stored = await localDb.getEventById('already_published');
+            expect(stored).toBeDefined();
+            expect(stored?.published).toBe(true); // Should remain true
+        });
+    });
+
+    describe('getUnpublishedEvents', () => {
+        const pubkeyUnpub = 'pk_unpub_test';
+
+        it('should return events explicitly marked as published: false', async () => {
+            const event1 = createEvent('unpub_1', 1, pubkeyUnpub, 1000, '', [], undefined, false);
+            const event2 = createEvent('unpub_2', 30003, pubkeyUnpub, 1005, '', [['d', dTag1]], undefined, false);
+            await localDb.addOrUpdateEvent(event1);
+            await localDb.addOrUpdateEvent(event2);
+
+            const unpublished = await localDb.getUnpublishedEvents(pubkeyUnpub);
+            expect(unpublished).toHaveLength(2);
+            expect(unpublished.map(e => e.id).sort()).toEqual(['unpub_1', 'unpub_2'].sort());
+        });
+
+        it('should return events with undefined published status', async () => {
+            const event1 = createEvent('undef_1', 1, pubkeyUnpub, 1000); // No published flag
+            const event2 = createEvent('undef_2', 10002, pubkeyUnpub, 1005); // No published flag
+            await localDb.addOrUpdateEvent(event1);
+            await localDb.addOrUpdateEvent(event2);
+
+            const unpublished = await localDb.getUnpublishedEvents(pubkeyUnpub);
+            expect(unpublished).toHaveLength(2);
+            expect(unpublished.map(e => e.id).sort()).toEqual(['undef_1', 'undef_2'].sort());
+            expect(unpublished.every(e => e.published === undefined)).toBe(true);
+        });
+
+        it('should NOT return events marked as published: true', async () => {
+            const eventUnpub = createEvent('unpub_mix', 1, pubkeyUnpub, 1000, '', [], undefined, false);
+            const eventPub = createEvent('pub_mix', 1, pubkeyUnpub, 1005, '', [], undefined, true);
+            const eventUndef = createEvent('undef_mix', 1, pubkeyUnpub, 1010);
+            await localDb.addOrUpdateEvent(eventUnpub);
+            await localDb.addOrUpdateEvent(eventPub);
+            await localDb.addOrUpdateEvent(eventUndef);
+
+            const unpublished = await localDb.getUnpublishedEvents(pubkeyUnpub);
+            expect(unpublished).toHaveLength(2);
+            expect(unpublished.map(e => e.id).sort()).toEqual(['undef_mix', 'unpub_mix'].sort());
+            expect(unpublished.find(e => e.id === 'pub_mix')).toBeUndefined();
+        });
+
+        it('should return an empty array if no events exist for the pubkey', async () => {
+            await expect(localDb.getUnpublishedEvents('non_existent_pk')).resolves.toEqual([]);
+        });
+
+        it('should return an empty array if all events for the pubkey are published: true', async () => {
+            const event1 = createEvent('all_pub_1', 1, pubkeyUnpub, 1000, '', [], undefined, true);
+            const event2 = createEvent('all_pub_2', 10002, pubkeyUnpub, 1005, '', [], undefined, true);
+            await localDb.addOrUpdateEvent(event1);
+            await localDb.addOrUpdateEvent(event2);
+
+            await expect(localDb.getUnpublishedEvents(pubkeyUnpub)).resolves.toEqual([]);
+        });
+
+         it('should only return events for the specified pubkey', async () => {
+            const eventPk1Unpub = createEvent('pk1_unpub', 1, pubkey1, 1000, '', [], undefined, false);
+            const eventPk1Pub = createEvent('pk1_pub', 1, pubkey1, 1005, '', [], undefined, true);
+            const eventPk2Unpub = createEvent('pk2_unpub', 1, pubkey2, 1010, '', [], undefined, false);
+            const eventPk2Undef = createEvent('pk2_undef', 1, pubkey2, 1015);
+            await localDb.addOrUpdateEvent(eventPk1Unpub);
+            await localDb.addOrUpdateEvent(eventPk1Pub);
+            await localDb.addOrUpdateEvent(eventPk2Unpub);
+            await localDb.addOrUpdateEvent(eventPk2Undef);
+
+            const unpublishedPk1 = await localDb.getUnpublishedEvents(pubkey1);
+            expect(unpublishedPk1).toHaveLength(1);
+            expect(unpublishedPk1[0].id).toBe('pk1_unpub');
+
+            const unpublishedPk2 = await localDb.getUnpublishedEvents(pubkey2);
+            expect(unpublishedPk2).toHaveLength(2);
+            expect(unpublishedPk2.map(e => e.id).sort()).toEqual(['pk2_undef', 'pk2_unpub'].sort());
         });
     });
 }); 

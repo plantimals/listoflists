@@ -67,12 +67,40 @@
 {#if expanded && node.items && node.items.length > 0}
     <div class="ml-6 mt-1 border-l border-base-300 pl-3 space-y-1 py-1" style="margin-left: {(level + 1) * 1.5}rem;">
         {#each node.items as item (item.type + item.value)}
-            {#if item.type === 'p'}
-                <UserItem pubkey={item.value} />
-            {:else if item.type === 'e'}
-                <NoteItem eventId={item.value} />
-            {/if}
+            <div class="flex items-center justify-between space-x-2 group hover:bg-base-200/50 rounded pr-2">
+                 <!-- Item Component -->
+                 <div class="flex-grow">
+                    {#if item.type === 'p'}
+                        <UserItem pubkey={item.value} />
+                    {:else if item.type === 'e'}
+                        <NoteItem eventId={item.value} />
+                    {/if}
+                 </div>
+                 <!-- Remove Button -->
+                 <button 
+                    class="btn btn-xs btn-ghost btn-circle text-error opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Remove Item"
+                    on:click|stopPropagation={() => {
+                        console.log('TODO: Remove item:', item);
+                        // Prevent click from propagating to the main node div expand/collapse
+                    }}
+                 >
+                    ✕
+                 </button>
+            </div>
         {/each}
+
+         <!-- Add Item Button -->
+         <div class="mt-2">
+             <button 
+                 class="btn btn-xs btn-outline btn-primary"
+                 on:click|stopPropagation={() => {
+                    console.log('TODO: Open Add Item modal/form for list:', node);
+                 }}
+             >
+                 + Add Item
+             </button>
+         </div>
     </div>
 {/if}
 

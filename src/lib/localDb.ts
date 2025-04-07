@@ -47,6 +47,15 @@ export class NostrLocalDB extends Dexie {
 		// Version 2 Schema (L6.1: Added 'published' field and index)
 		this.version(2).stores({
 			events:
+				// Indexes:
+				// 1. id: Primary key (unique event hash)
+				// 2. kind: For querying by event type
+				// 3. pubkey: For querying by author
+				// 4. created_at: For time-based queries/sorting (implicitly used by Dexie in some cases)
+				// 5. published: For querying based on publish status
+				// 6. [kind+pubkey]: For standard replaceable events (Kind 0, 3, 10k-20k)
+				// 7. [kind+pubkey+dTag]: For parameterized replaceable events (Kind 30k-40k)
+				// 8. [pubkey+published]: For efficiently finding unpublished events for a user
 				'id, kind, pubkey, created_at, published, [kind+pubkey], [kind+pubkey+dTag], [pubkey+published]',
 			profiles: 'pubkey, created_at' // No changes needed for profiles table schema in v2
 		});
@@ -58,7 +67,7 @@ export class NostrLocalDB extends Dexie {
 		this.profiles = this.table("profiles");
 	}
 
-	// Method to add/update events (Updated L6.1 to preserve local 'published' status)
+	// Method to add/update events (Reviewed L6.1 - existing logic preserves newer local unpublished events)
 	async addOrUpdateEvent(event: StoredEvent): Promise<void> {
 		const isNewEventMarkedUnpublished = event.published === false;
 
@@ -75,12 +84,13 @@ export class NostrLocalDB extends Dexie {
 				const key: [number, string] = [event.kind, event.pubkey];
 				existingEvent = await keyQuery.equals(key).first();
 			} else {
+				// This case shouldn't happen for standard replaceable kinds, but handle defensively
 				console.warn(`Replaceable event kind ${event.kind} without specific coordinate handling, attempting simple put.`);
 				// Use transaction for potential update
 				await this.transaction('rw', this.events, async () => {
 					const current = await this.events.get(event.id);
-					// Preserve published status if the incoming event doesn't specify it
-					if (current && event.published === undefined) {
+					// Preserve published status if the incoming event doesn't specify it and is not explicitly unpublished
+					if (current && event.published === undefined && !isNewEventMarkedUnpublished) {
 						event.published = current.published;
 					}
 					await this.events.put(event);
@@ -91,33 +101,37 @@ export class NostrLocalDB extends Dexie {
 			await this.transaction('rw', this.events, async () => {
 				let performPut = false;
 				if (!existingEvent) {
-					performPut = true;
+					performPut = true; // Add if no existing event found
 				} else if (event.created_at > existingEvent.created_at) {
-					performPut = true;
+					performPut = true; // Update if new event is strictly newer
 				} else if (event.created_at === existingEvent.created_at && event.id < existingEvent.id) {
+                    // Nip-01 tie-breaking rule: if timestamps are equal, lower event ID wins
 					performPut = true;
 				}
 
 				if (performPut) {
-					// Preserve existing published status if the incoming event is an update from network (published === undefined)
-					// and the new event is *not* explicitly marked as unpublished
+					// Preserve existing published status only if:
+					// 1. There is an existing event.
+					// 2. The incoming event *doesn't* have a 'published' status set (i.e., it's likely from network sync).
+					// 3. The incoming event is *not* explicitly marked as unpublished (which takes precedence).
 					if (existingEvent && event.published === undefined && !isNewEventMarkedUnpublished) {
 						event.published = existingEvent.published;
 					}
-					// If an existing event is being replaced, delete the old one first
+					// If an existing event is being replaced, delete the old one first to avoid conflicts
 					if (existingEvent) {
 						await this.events.delete(existingEvent.id);
 					}
 					await this.events.put(event);
 				} else {
-					// New event is older or same age with larger ID, do nothing
-					console.log(`Skipping update for event ${event.id}, existing is newer or same age with smaller ID.`);
+					// New event is older or same age with larger/equal ID, do nothing
+					console.log(`Skipping update for replaceable event ${event.id}, existing is newer or preferred.`);
 				}
 			});
 
 		} else {
 			// Handle Non-Replaceable Event (e.g., Kind 1 Note)
-			// Simple put, but preserve published status if updating
+			// Non-replaceable events are added based on their unique ID.
+			// Use put which acts as add or update based on primary key 'id'.
 			await this.transaction('rw', this.events, async () => {
 				const current = await this.events.get(event.id);
 				// Preserve published status if the incoming event doesn't specify it
@@ -130,7 +144,7 @@ export class NostrLocalDB extends Dexie {
 		}
 	}
 
-	// Updated L6.1 to preserve 'published' status
+	// Add/Update Profile (Reviewed L6.1 - relies on addOrUpdateEvent for correct event handling)
 	async addOrUpdateProfile(profileEvent: StoredEvent): Promise<void> {
 		if (profileEvent.kind !== 0) {
 			console.warn("Attempted to add non-kind 0 event as profile:", profileEvent);
@@ -179,7 +193,7 @@ export class NostrLocalDB extends Dexie {
 		}
 	}
 
-	// --- L6.1: New Methods --- 
+	// --- L6.1: New Methods ---
 
 	/**
 	 * Marks a locally stored event as published.
@@ -190,10 +204,12 @@ export class NostrLocalDB extends Dexie {
 			const count = await this.events.update(eventId, { published: true });
 			if (count === 0) {
 				console.warn(`Tried to mark event ${eventId} as published, but it was not found.`);
+			} else {
+				console.log(`Marked event ${eventId} as published.`);
 			}
-			console.log(`Marked event ${eventId} as published.`);
 		} catch (error) {
 			console.error(`Failed to mark event ${eventId} as published:`, error);
+			// Optionally re-throw or handle differently
 		}
 	}
 
@@ -205,9 +221,10 @@ export class NostrLocalDB extends Dexie {
 	 */
 	async getUnpublishedEvents(pubkey: string): Promise<StoredEvent[]> {
 		try {
-			// Use filter for robust check against undefined and false
+			// Use filter for robust check against undefined and false.
+			// The index [pubkey+published] helps Dexie optimize the initial filtering by pubkey.
 			const unpublished = await this.events
-				.where({ pubkey: pubkey })
+				.where({ pubkey: pubkey }) // Efficiently selects events by pubkey using index
 				.filter(event => event.published !== true) // Checks for false or undefined
 				.toArray();
 			console.log(`Found ${unpublished.length} unpublished events for pubkey ${pubkey}`);
