@@ -9,6 +9,7 @@
     import { ndk } from '$lib/ndkStore';
     import { refreshTrigger } from '$lib/refreshStore';
     import { addItemToList, removeItemFromList, type ListServiceDependencies } from '$lib/listService'; // Import list service functions
+    import AddItemModal from './AddItemModal.svelte'; // Import the modal
 
     export let node: TreeNodeData;
     export let level: number = 0;
@@ -17,75 +18,53 @@
     let isAdding: boolean = false;
     let isRemovingItemId: string | null = null; // Store which item is being removed
 
+    // Reference to the modal component instance
+    let addItemModalInstance: AddItemModal;
+
     async function handleRemoveItem(item: { type: 'p' | 'e'; value: string }) {
         const itemIdentifier = `${item.type}:${item.value}`;
-        isRemovingItemId = itemIdentifier; // Set loading for this specific item
+        isRemovingItemId = itemIdentifier; // Set loading state for *this* item
 
         const currentUser = get(user);
         const ndkInstance = get(ndk);
 
         if (!currentUser || !ndkInstance) {
             console.error('Remove Item Error: User or NDK instance not available.');
-            alert('User or NDK instance not available. Cannot remove item.');
-            isRemovingItemId = null;
+            // Potentially show a user-facing error message
+            alert('Login required to remove items.');
+            isRemovingItemId = null; // Reset loading state
             return;
         }
 
         const deps: ListServiceDependencies = { currentUser, ndkInstance };
 
         try {
+            // Use node.eventId as the list identifier
             const result = await removeItemFromList(node.eventId, item, deps);
+
             if (result.success) {
-                console.log('Item removed successfully, triggering refresh...', result);
-                refreshTrigger.update(n => n + 1); // Trigger refresh
+                console.log(`Item ${item.type}:${item.value} removed locally from list ${node.eventId}. Triggering refresh.`);
+                // Trigger global refresh mechanism
+                refreshTrigger.update(n => n + 1);
+                // Optional: Could update local node state optimistically here, but global refresh handles it
             } else {
-                console.error('Failed to remove item:', result.error);
-                alert(`Failed to remove item: ${result.error}`);
+                console.error(`Failed to remove item from list ${node.eventId}:`, result.error);
+                // Show user-facing error
+                alert(`Failed to remove item: ${result.error || 'Unknown error'}`);
             }
         } catch (error) {
-            console.error('Error calling removeItemFromList:', error);
+            console.error(`Error calling removeItemFromList for list ${node.eventId}:`, error);
             alert('An unexpected error occurred while removing the item.');
         } finally {
-            isRemovingItemId = null; // Clear loading state regardless of outcome
+            isRemovingItemId = null; // Reset loading state regardless of outcome
         }
     }
 
-    async function handleAddItem() {
-        const itemValue = prompt('Enter pubkey (or event ID) to add:'); // Simple prompt for now
-        if (!itemValue) return; // User cancelled
-
-        // Very basic check - better validation needed for real use
-        const itemType = itemValue.length === 64 && /^[0-9a-f]+$/.test(itemValue) ? 'p' : 'e';
-
-        const itemToAdd = { type: itemType as 'p' | 'e', value: itemValue.trim() };
-
-        isAdding = true;
-        const currentUser = get(user);
-        const ndkInstance = get(ndk);
-
-        if (!currentUser || !ndkInstance) {
-            console.error('Add Item Error: User or NDK instance not available.');
-            alert('User or NDK instance not available. Cannot add item.');
-            isAdding = false;
-            return;
-        }
-
-        const deps: ListServiceDependencies = { currentUser, ndkInstance };
-
-        try {
-            const result = await addItemToList(node.eventId, itemToAdd, deps);
-            if (result.success) {
-                console.log('Item added successfully, triggering refresh...', result);
-                refreshTrigger.update(n => n + 1); // Trigger refresh
-            } else {
-                console.error('Failed to add item:', result.error);
-                alert(`Failed to add item: ${result.error}`);
-            }
-        } catch (error) {
-            console.error('Error calling addItemToList:', error);
-            alert('An unexpected error occurred while adding the item.');
-        } finally {
-            isAdding = false;
+    function openAddItemModal() {
+        if (addItemModalInstance) {
+            // Pass the current node's event ID as the target list ID
+            addItemModalInstance.targetListId = node.eventId;
+            addItemModalInstance.open(); // Call the modal's open method
         }
     }
 
@@ -165,18 +144,19 @@
                     on:click|stopPropagation={() => handleRemoveItem(item)}
                     disabled={isRemovingItemId !== null}
                  >
-                    <span>✕</span>
+                    {#if isRemovingItemId !== itemIdentifier}
+                      <span>✕</span>
+                    {/if}
                  </button>
             </div>
         {/each}
 
-         <!-- Add Item Button -->
+         <!-- Add Item Button - Now opens the modal -->
          <div class="mt-2">
              <button
                  class="btn btn-xs btn-outline btn-primary"
-                 class:loading={isAdding}
-                 on:click|stopPropagation={handleAddItem}
-                 disabled={isAdding || isRemovingItemId !== null}
+                 on:click|stopPropagation={openAddItemModal}
+                 disabled={isRemovingItemId !== null}
              >
                  <span>+ Add Item</span>
              </button>
@@ -191,4 +171,9 @@
       <svelte:self node={childNode} level={level + 1}/>
     {/each}
   </div>
-{/if} 
+{/if}
+
+<!-- AddItemModal Instance -->
+<!-- Render the modal; it will be hidden by default -->
+<!-- We pass targetListId when opening, so initial value doesn't strictly matter here -->
+<AddItemModal bind:this={addItemModalInstance} targetListId={node.eventId} /> 
