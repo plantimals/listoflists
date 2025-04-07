@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } fr
 import NDK, { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
 import type { NDKSigner, NostrEvent } from '@nostr-dev-kit/ndk';
 import type { NDKUser } from '@nostr-dev-kit/ndk';
-import type { StoredEvent } from '$lib/localDb';
+import { localDb, type StoredEvent } from '$lib/localDb';
 import type { ListServiceDependencies } from '$lib/listService';
 import { addItemToList, removeItemFromList } from '$lib/listService';
 
-// Re-define mock functions in outer scope
-const mockGetEventById = vi.fn();
-const mockAddOrUpdateEvent = vi.fn();
+// Remove outer scope mock function variables
+// let mockGetEventById: ReturnType<typeof vi.fn>;
+// let mockAddOrUpdateEvent: ReturnType<typeof vi.fn>;
 
 // Mock NDK
 vi.mock('@nostr-dev-kit/ndk', async (importOriginal) => {
@@ -30,21 +30,15 @@ vi.mock('@nostr-dev-kit/ndk', async (importOriginal) => {
 	};
 });
 
-// Mock localDb - Assign outer mocks inside factory, do not export
-vi.mock('$lib/localDb', async () => {
-	return {
-		localDb: {
-			getEventById: mockGetEventById,
-			addOrUpdateEvent: mockAddOrUpdateEvent,
-		},
-	};
-});
+// REMOVE the vi.mock for $lib/localDb
+// vi.mock('$lib/localDb', async () => { ... });
 
 // Access the mocked NDKUser
 const { NDKUser: MockNDKUser } = await import('@nostr-dev-kit/ndk');
-// DO NOT import mock DB functions
 
-// Spy variable for NDKEvent.sign with explicit type
+// Spy variables for localDb methods and NDKEvent.sign
+let getEventByIdSpy: MockInstance<typeof localDb.getEventById>;
+let addOrUpdateEventSpy: MockInstance<typeof localDb.addOrUpdateEvent>;
 let signSpy: MockInstance<(signer?: NDKSigner | undefined) => Promise<string>>;
 
 // Mock the NDK instance and its methods if necessary
@@ -91,59 +85,64 @@ const otherUsersList: StoredEvent = {
 	id: 'other_event_id_456',
 };
 
-// --- Dependencies Object ---
-let deps: ListServiceDependencies;
+// Redefine ListServiceDependencies to match service expectations IF needed
+// The service actually imports { localDb } directly, so we don't need
+// to pass these methods via dependencies object. We only need
+// currentUser and ndkInstance for the service function signature.
+type TestDependencies = {
+	currentUser: NDKUser | null;
+	ndkInstance: NDK | null;
+}
+let testDeps: TestDependencies;
 
 // --- Test Suites ---
 describe('listService', () => {
 	beforeEach(() => {
-		// Reset mocks FIRST - Use outer scope mocks
-		vi.resetAllMocks(); // Resets spies too
-        mockGetEventById.mockClear();
-        mockAddOrUpdateEvent.mockClear();
+		// Reset spies and mocks
+		vi.resetAllMocks();
 
-		// Set up dependencies and default mocks - Use outer scope mocks
+		// Set up spies on the ACTUAL localDb methods
+		getEventByIdSpy = vi.spyOn(localDb, 'getEventById').mockResolvedValue(baseList);
+		addOrUpdateEventSpy = vi.spyOn(localDb, 'addOrUpdateEvent').mockResolvedValue(undefined);
+
+		// Set up NDK Signer and spy on NDKEvent.sign
 		mockNdkInstance.signer = mockSigner;
-		mockGetEventById.mockResolvedValue(baseList);
-		mockAddOrUpdateEvent.mockResolvedValue(undefined);
-
-		// Set up spy AFTER resetting mocks
 		signSpy = vi.spyOn(NDKEvent.prototype, 'sign').mockImplementation(async function(this: NDKEvent) {
 			this.id = `mock_id_${Date.now()}`;
 			this.sig = `mock_sig_${Date.now()}`;
 			return this.sig;
 		});
 
-		// Set up deps AFTER mocks/spies are configured
-		deps = {
+		// Set up test dependencies object passed to service function
+		testDeps = {
 			currentUser: currentUser,
 			ndkInstance: mockNdkInstance as NDK,
 		};
 	});
 
 	afterEach(() => {
-		// Restore spies explicitly
-        if (signSpy) {
-            signSpy.mockRestore();
-        }
-        // Mocks themselves are cleared/reset in beforeEach now
+		// Restore all spies
+        vi.restoreAllMocks(); // This should restore spies created with vi.spyOn
 	});
 
-	// Tests use the outer scope mockGetEventById and mockAddOrUpdateEvent
+	// Tests now rely on spies intercepting calls to the actual localDb
 	describe('addItemToList', () => {
 		const listEventId = baseList.id;
 		const newItem = { type: 'p' as 'p'|'e', value: 'pubkey2' };
 		const itemToAddTag = [newItem.type, newItem.value];
 
 		it('should add a new item to an existing list', async () => {
-			const result = await addItemToList(listEventId, newItem, deps);
+			// Pass the simplified testDeps object
+			const result = await addItemToList(listEventId, newItem, testDeps);
 			expect(result.success).toBe(true);
 			expect(result.error).toBeUndefined();
 			expect(result.newEventId).toBeDefined();
-			expect(mockGetEventById).toHaveBeenCalledWith(listEventId);
+			// Check spies
+			expect(getEventByIdSpy).toHaveBeenCalledWith(listEventId);
 			expect(signSpy).toHaveBeenCalledOnce();
-			expect(mockAddOrUpdateEvent).toHaveBeenCalledOnce();
-			const savedEvent = mockAddOrUpdateEvent.mock.calls[0][0] as StoredEvent;
+			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+			// Check call arguments on the spy
+			const savedEvent = addOrUpdateEventSpy.mock.calls[0][0] as StoredEvent;
 			expect(savedEvent.tags).toContainEqual(itemToAddTag);
 			expect(savedEvent.tags.length).toBe(baseList.tags.length + 1);
 			expect(savedEvent.pubkey).toBe(currentUser.pubkey);
@@ -152,39 +151,43 @@ describe('listService', () => {
 		});
 
 		it('should update an existing item in a list (by replacing - check idempotency)', async () => {
-			mockGetEventById.mockResolvedValueOnce(baseList);
+			// Use spy to control return value for this specific call
+			getEventByIdSpy.mockResolvedValueOnce(baseList);
 			const existingItem = { type: 'p' as 'p'|'e', value: 'pubkey1' };
-			const resultIdempotent = await addItemToList(listEventId, existingItem, deps);
+			const resultIdempotent = await addItemToList(listEventId, existingItem, testDeps);
 
 			expect(resultIdempotent.success).toBe(true);
 			expect(resultIdempotent.error).toBeUndefined();
-			expect(mockGetEventById).toHaveBeenCalledWith(listEventId);
+			// Check spies
+			expect(getEventByIdSpy).toHaveBeenCalledWith(listEventId);
 			expect(signSpy).toHaveBeenCalledOnce();
-			expect(mockAddOrUpdateEvent).toHaveBeenCalledOnce();
-			const updatedEvent = mockAddOrUpdateEvent.mock.calls[0][0] as StoredEvent;
+			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+			const updatedEvent = addOrUpdateEventSpy.mock.calls[0][0] as StoredEvent;
 			expect(updatedEvent.tags).toContainEqual(['p', 'pubkey1']);
 			expect(updatedEvent.tags.length).toBe(baseList.tags.length);
 		});
 
 		it('should return error if list event not found locally', async () => {
-			mockGetEventById.mockResolvedValueOnce(undefined);
-			const result = await addItemToList(listEventId, newItem, deps);
+			// Use spy to control return value
+			getEventByIdSpy.mockResolvedValueOnce(undefined);
+			const result = await addItemToList(listEventId, newItem, testDeps);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain(`List event with ID ${listEventId} not found locally`);
-			expect(mockGetEventById).toHaveBeenCalledWith(listEventId);
+			// Check spies
+			expect(getEventByIdSpy).toHaveBeenCalledWith(listEventId);
 			expect(signSpy).not.toHaveBeenCalled();
-			expect(mockAddOrUpdateEvent).not.toHaveBeenCalled();
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
 		});
 
 		it('should return error if currentUser is not available', async () => {
-			const depsWithoutUser: ListServiceDependencies = { ...deps, currentUser: null };
+			const depsWithoutUser: TestDependencies = { ...testDeps, currentUser: null };
 			const result = await addItemToList(listEventId, newItem, depsWithoutUser);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('User not logged in');
 		});
 
 		it('should return error if NDK instance is not available', async () => {
-			const depsWithoutNdk: ListServiceDependencies = { ...deps, ndkInstance: null };
+			const depsWithoutNdk: TestDependencies = { ...testDeps, ndkInstance: null };
 			const result = await addItemToList(listEventId, newItem, depsWithoutNdk);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('NDK not initialized');
@@ -192,44 +195,50 @@ describe('listService', () => {
 
 		it('should return error if signer is not available', async () => {
 			const ndkWithoutSigner = { ...mockNdkInstance, signer: undefined } as Partial<NDK>;
-			const depsWithoutSigner: ListServiceDependencies = { ...deps, ndkInstance: ndkWithoutSigner as NDK };
+			const depsWithoutSigner: TestDependencies = { ...testDeps, ndkInstance: ndkWithoutSigner as NDK };
 			const result = await addItemToList(listEventId, newItem, depsWithoutSigner);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('Nostr signer not available (NIP-07?)');
 		});
 
 		it('should return error if event pubkey does not match currentUser.pubkey', async () => {
-			mockGetEventById.mockResolvedValueOnce(otherUsersList);
-			const result = await addItemToList(listEventId, newItem, deps);
+			// Use spy to control return value
+			getEventByIdSpy.mockResolvedValueOnce(otherUsersList);
+			const result = await addItemToList(listEventId, newItem, testDeps);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('Cannot modify an event belonging to another user.');
-			expect(mockGetEventById).toHaveBeenCalledWith(listEventId);
+			// Check spies
+			expect(getEventByIdSpy).toHaveBeenCalledWith(listEventId);
 			expect(signSpy).not.toHaveBeenCalled();
-			expect(mockAddOrUpdateEvent).not.toHaveBeenCalled();
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
 		});
 
 		it('should return error if signing fails', async () => {
-			mockGetEventById.mockResolvedValueOnce(baseList);
+			// Use spy to control return value
+			getEventByIdSpy.mockResolvedValueOnce(baseList);
 			const signError = new Error('Signature failed');
 			signSpy.mockRejectedValueOnce(signError);
-			const result = await addItemToList(listEventId, newItem, deps);
+			const result = await addItemToList(listEventId, newItem, testDeps);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain(signError.message);
-			expect(mockGetEventById).toHaveBeenCalledWith(listEventId);
+			// Check spies
+			expect(getEventByIdSpy).toHaveBeenCalledWith(listEventId);
 			expect(signSpy).toHaveBeenCalledOnce();
-			expect(mockAddOrUpdateEvent).not.toHaveBeenCalled();
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
 		});
 
 		it('should return error if addOrUpdateEvent fails', async () => {
 			const dbError = new Error('Database write failed');
-			mockGetEventById.mockResolvedValueOnce(baseList);
-			mockAddOrUpdateEvent.mockRejectedValueOnce(dbError);
-			const result = await addItemToList(listEventId, newItem, deps);
+			// Use spies to control return values
+			getEventByIdSpy.mockResolvedValueOnce(baseList);
+			addOrUpdateEventSpy.mockRejectedValueOnce(dbError);
+			const result = await addItemToList(listEventId, newItem, testDeps);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain(dbError.message);
-			expect(mockGetEventById).toHaveBeenCalledWith(listEventId);
+			// Check spies
+			expect(getEventByIdSpy).toHaveBeenCalledWith(listEventId);
 			expect(signSpy).toHaveBeenCalledOnce();
-			expect(mockAddOrUpdateEvent).toHaveBeenCalledOnce();
+			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
 		});
 	});
 
@@ -239,14 +248,15 @@ describe('listService', () => {
 		const itemToRemoveTag = [itemToRemove.type, itemToRemove.value];
 
 		it('should remove an existing item from a list', async () => {
-			const result = await removeItemFromList(listEventId, itemToRemove, deps);
+			const result = await removeItemFromList(listEventId, itemToRemove, testDeps);
 			expect(result.success).toBe(true);
 			expect(result.error).toBeUndefined();
 			expect(result.newEventId).toBeDefined();
-			expect(mockGetEventById).toHaveBeenCalledWith(listEventId);
+			// Check spies
+			expect(getEventByIdSpy).toHaveBeenCalledWith(listEventId);
 			expect(signSpy).toHaveBeenCalledOnce();
-			expect(mockAddOrUpdateEvent).toHaveBeenCalledOnce();
-			const savedEvent = mockAddOrUpdateEvent.mock.calls[0][0] as StoredEvent;
+			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+			const savedEvent = addOrUpdateEventSpy.mock.calls[0][0] as StoredEvent;
 			expect(savedEvent.tags).not.toContainEqual(itemToRemoveTag);
 			expect(savedEvent.tags).toContainEqual(['d', 'my-bookmarks']);
 			expect(savedEvent.tags).toContainEqual(['e', 'eventid1']);
@@ -258,35 +268,39 @@ describe('listService', () => {
 
 		it('should succeed even if item does not exist in list (idempotent remove)', async () => {
 			const nonExistentItem = { type: 'p' as 'p'|'e', value: 'nonexistent' };
-			mockGetEventById.mockResolvedValueOnce(baseList);
-			const result = await removeItemFromList(listEventId, nonExistentItem, deps);
+			// Use spy to control return value
+			getEventByIdSpy.mockResolvedValueOnce(baseList);
+			const result = await removeItemFromList(listEventId, nonExistentItem, testDeps);
 			expect(result.success).toBe(true);
 			expect(result.error).toBeUndefined();
 			expect(result.newEventId).toBeDefined();
-			expect(mockGetEventById).toHaveBeenCalledWith(listEventId);
+			// Check spies
+			expect(getEventByIdSpy).toHaveBeenCalledWith(listEventId);
 			expect(signSpy).toHaveBeenCalledOnce();
-			expect(mockAddOrUpdateEvent).toHaveBeenCalledOnce();
+			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
 		});
 
 		it('should return error if list event not found locally', async () => {
-			mockGetEventById.mockResolvedValueOnce(undefined);
-			const result = await removeItemFromList(listEventId, itemToRemove, deps);
+			// Use spy to control return value
+			getEventByIdSpy.mockResolvedValueOnce(undefined);
+			const result = await removeItemFromList(listEventId, itemToRemove, testDeps);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain(`List event with ID ${listEventId} not found locally`);
-			expect(mockGetEventById).toHaveBeenCalledWith(listEventId);
+			// Check spies
+			expect(getEventByIdSpy).toHaveBeenCalledWith(listEventId);
 			expect(signSpy).not.toHaveBeenCalled();
-			expect(mockAddOrUpdateEvent).not.toHaveBeenCalled();
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
 		});
 
 		it('should return error if currentUser is not available', async () => {
-			const depsWithoutUser: ListServiceDependencies = { ...deps, currentUser: null };
+			const depsWithoutUser: TestDependencies = { ...testDeps, currentUser: null };
 			const result = await removeItemFromList(listEventId, itemToRemove, depsWithoutUser);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('User not logged in');
 		});
 
 		it('should return error if NDK instance is not available', async () => {
-			const depsWithoutNdk: ListServiceDependencies = { ...deps, ndkInstance: null };
+			const depsWithoutNdk: TestDependencies = { ...testDeps, ndkInstance: null };
 			const result = await removeItemFromList(listEventId, itemToRemove, depsWithoutNdk);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('NDK not initialized');
@@ -294,44 +308,50 @@ describe('listService', () => {
 
 		it('should return error if signer is not available', async () => {
 			const ndkWithoutSigner = { ...mockNdkInstance, signer: undefined } as Partial<NDK>;
-			const depsWithoutSigner: ListServiceDependencies = { ...deps, ndkInstance: ndkWithoutSigner as NDK };
+			const depsWithoutSigner: TestDependencies = { ...testDeps, ndkInstance: ndkWithoutSigner as NDK };
 			const result = await removeItemFromList(listEventId, itemToRemove, depsWithoutSigner);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('Nostr signer not available (NIP-07?)');
 		});
 
 		it('should return error if event pubkey does not match currentUser.pubkey', async () => {
-			mockGetEventById.mockResolvedValueOnce(otherUsersList);
-			const result = await removeItemFromList(listEventId, itemToRemove, deps);
+			// Use spy to control return value
+			getEventByIdSpy.mockResolvedValueOnce(otherUsersList);
+			const result = await removeItemFromList(listEventId, itemToRemove, testDeps);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('Cannot modify an event belonging to another user.');
-			expect(mockGetEventById).toHaveBeenCalledWith(listEventId);
+			// Check spies
+			expect(getEventByIdSpy).toHaveBeenCalledWith(listEventId);
 			expect(signSpy).not.toHaveBeenCalled();
-			expect(mockAddOrUpdateEvent).not.toHaveBeenCalled();
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
 		});
 
 		it('should return error if signing fails', async () => {
-			mockGetEventById.mockResolvedValueOnce(baseList);
+			// Use spies to control return values
+			getEventByIdSpy.mockResolvedValueOnce(baseList);
 			const signError = new Error('Signature failed');
 			signSpy.mockRejectedValueOnce(signError);
-			const result = await removeItemFromList(listEventId, itemToRemove, deps);
+			const result = await removeItemFromList(listEventId, itemToRemove, testDeps);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain(signError.message);
-			expect(mockGetEventById).toHaveBeenCalledWith(listEventId);
+			// Check spies
+			expect(getEventByIdSpy).toHaveBeenCalledWith(listEventId);
 			expect(signSpy).toHaveBeenCalledOnce();
-			expect(mockAddOrUpdateEvent).not.toHaveBeenCalled();
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
 		});
 
 		it('should return error if addOrUpdateEvent fails', async () => {
 			const dbError = new Error('Database write failed');
-			mockGetEventById.mockResolvedValueOnce(baseList);
-			mockAddOrUpdateEvent.mockRejectedValueOnce(dbError);
-			const result = await removeItemFromList(listEventId, itemToRemove, deps);
+			// Use spies to control return values
+			getEventByIdSpy.mockResolvedValueOnce(baseList);
+			addOrUpdateEventSpy.mockRejectedValueOnce(dbError);
+			const result = await removeItemFromList(listEventId, itemToRemove, testDeps);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain(dbError.message);
-			expect(mockGetEventById).toHaveBeenCalledWith(listEventId);
+			// Check spies
+			expect(getEventByIdSpy).toHaveBeenCalledWith(listEventId);
 			expect(signSpy).toHaveBeenCalledOnce();
-			expect(mockAddOrUpdateEvent).toHaveBeenCalledOnce();
+			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
 		});
 	});
 });
