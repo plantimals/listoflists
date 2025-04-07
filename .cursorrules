@@ -1,95 +1,85 @@
-**Project Description: Nostr Hierarchical List Manager (Client-Side)**
+Project Description: Nostr Hierarchical List Manager (Local-First Client)
 
-**Version:** 1.1
-**Date:** April 6, 2025
+Version: 1.2
+Date: April 6, 2025
 
-**1. Introduction & Vision**
+1. Introduction & Vision
 
-Nostr's decentralized nature allows users to follow profiles and events, but managing large amounts of information, curated lists, and relationships can become challenging. NIP-51 provides a standard for creating lists (e.g., mutes, pins, follows, bookmarks), but lacks explicit support for hierarchical organization.
+Nostr's decentralized nature allows users to follow profiles and events, but managing large amounts of information can be challenging. NIP-51 provides a standard for lists, but lacks explicit hierarchical support.
 
-This project aims to build a **purely client-side web application** that empowers Nostr users to create, manage, and browse **hierarchical lists** based on NIP-51. Users will be able to organize their Nostr world by nesting lists within other lists, containing references to user profiles (npubs), notes/events, and crucially, other lists via stable coordinates. The application will run entirely in the user's browser, interacting directly with Nostr relays via NDK and leveraging browser extensions for key management (NIP-07). The focus is on user control, data ownership (via signed Nostr events), and a modern, fast user experience.
+This project aims to build a local-first, purely client-side web application that empowers Nostr users to create, manage, and browse hierarchical lists based on NIP-51. The application prioritizes storing your list data, related Nostr events (profiles, notes), and the hierarchy structure directly within your browser's local storage (IndexedDB). This ensures fast performance, enables reliable offline viewing of previously synchronized data, and reduces reliance on constant relay connectivity for core Browse functionality. Network interaction via NDK serves primarily to synchronize with the global Nostr network – fetching new/updated events from relays and publishing the user's signed changes back out. User control and data ownership remain paramount.
 
-**2. Goals**
+2. Goals
 
-* Provide an intuitive interface for creating and managing NIP-51 lists (Sets and Standard Lists).
-* Enable users to organize these lists hierarchically by referencing lists within other lists using stable coordinates.
-* Offer a clear and performant Tree View for Browse nested list structures.
-* Operate entirely client-side, with no backend required beyond serving static files.
-* Ensure data persistence through standard, signed Nostr events published to user-configured relays.
-* Deliver a modern, responsive, and fast UI/UX.
-* Lay the groundwork for supporting both public and private list items.
+    Provide an intuitive interface for creating and managing NIP-51 lists.
+    Enable users to organize these lists hierarchically using stable 'a' tag references.
+    Offer a clear and performant Tree View for Browse nested list structures.
+    Operate entirely client-side, with no backend required beyond serving static files.
+    Prioritize local data storage (IndexedDB) as the primary data source for the UI, enhancing performance and availability.
+    Enable reliable offline Browse of previously synchronized lists, profiles, notes, and their hierarchical structure.
+    Ensure data persistence and sharing through standard, signed Nostr events synchronized with user-configured relays.
+    Deliver a modern, responsive, and fast UI/UX.
 
-**3. Target Audience (Users)**
+3. Target Audience (Users)
 
-* Active Nostr users looking for better ways to organize followed profiles, bookmarked notes, projects, or communities.
-* Content curators who want to create structured lists of resources or recommendations.
-* Users who manage multiple sets of follows, mutes, or bookmarks and desire better organization.
+    (No change from previous version) Active Nostr users looking for better ways to organize... etc.
 
-**4. Core Features (MVP & Planned Scope)**
+4. Core Features (MVP & Planned Scope)
 
-* **NIP-07 Integration:** Authenticate/login via NIP-07 compatible browser extensions to get the user's public key and enable event signing.
-* **Relay Configuration:** Allow users to specify the list of Nostr relays the application should connect to via NDK.
-* **NIP-51 List Creation/Editing:**
-    * Support creating/editing NIP-51 Sets (e.g., Kind 30000 Follow Set, Kind 30003 Bookmark Set), including setting the unique `d` tag identifier and optional `title`.
-    * Support viewing/editing standard lists (e.g., Kind 10000 Mute List).
-    * Add/remove **public** items ('p' tags for npubs, 'e' tags for notes/event IDs) to lists.
-* **Hierarchical Organization:**
-    * Organize lists hierarchically: Add references to other NIP-51 list events as items within a list using **'a' tags (event coordinates)**, specifying `kind:pubkey:dTagIdentifier` (where `dTagIdentifier` is used for Sets, Kind 3xxxx). This ensures references remain valid even when the target list is updated (replaced), unlike 'e' tags for replaceable events.
-* **Hierarchical Browse:**
-    * Implement a custom Tree View component to display the nested list structure.
-    * Support expanding and collapsing parent lists (nodes) in the tree.
-    * Display list titles/identifiers in the tree nodes.
-* **List Item Display:**
-    * Within an expanded list node, display 'p' tag items with basic profile info (fetched Kind 0: avatar, name).
-    * Display 'e' tag items with basic note info (fetched Kind 1/etc: content preview).
-* **Persistence & Caching:**
-    * Publish all list creations/updates as signed NIP-51 events to user's relays via NDK.
-    * Implement client-side caching using IndexedDB to store fetched events (lists, profiles, notes) for improved performance and faster subsequent loads.
-* **Private List Items (Post-MVP):** Support for adding and viewing **private list items** (requiring NIP-04 encryption/decryption for the event's `.content` field) is a planned feature but deferred post-MVP for initial simplicity.
+    NIP-07 Integration: (No change)
+    Relay Configuration: (No change)
+    NIP-51 List Creation/Editing: (Specify local-first aspect)
+        Support creating/editing NIP-51 Sets and Standard Lists, initially storing changes locally before attempting synchronization.
+        Add/remove public items ('p', 'e') and hierarchical references ('a' to lists) locally first.
+    Hierarchical Organization: (No change to mechanism - 'a' tags)
+    Hierarchical Browse: (No change to UI goal)
+    List Item Display: (No change - fetch details as needed, store locally)
+    Local Persistence & Caching: All fetched/viewed lists, profiles, notes, and the computed hierarchy structure are stored robustly in IndexedDB.
+    Synchronization (MVP: Read-only): Implement logic to fetch relevant new/updated NIP-51 list events (and associated profiles/notes) from configured relays via NDK and merge them into the local IndexedDB store based on timestamps/event properties.
+    Offline Viewing: Browse already loaded/synchronized lists, profiles, notes, and navigate the hierarchy structure even when offline.
+    (Post-MVP Scope):
+        Publishing/Write Sync: Implement logic to queue locally created/modified lists, sign them via NIP-07 when online, publish them to relays via NDK, and handle potential conflicts (e.g., using last-write-wins based on created_at).
+        Private List Items: Support NIP-04 encryption/decryption for private items, storing encrypted data locally and syncing.
 
-**5. Technical Stack**
+5. Technical Stack
 
-* **Framework:** SvelteKit
-* **Nostr Library:** Nostr Dev Kit (NDK)
-* **Styling:** Tailwind CSS
-* **UI Toolkit:** Skeleton (for themes, layout, basic components, Tailwind integration)
-* **State Management:** Svelte Stores (built-in)
-* **Key Management:** NIP-07 Browser Extensions (Primary method)
-* **Storage (Persistence):** User's configured Nostr Relays (via NIP-51 events)
-* **Storage (Caching):** Browser IndexedDB
+    Framework: SvelteKit
+    Nostr Library: Nostr Dev Kit (NDK)
+    Styling: Tailwind CSS (+ DaisyUI plugin)
+    UI Toolkit: DaisyUI (via Tailwind plugin)
+    State Management: Svelte Stores (built-in)
+    Key Management: NIP-07 Browser Extensions (Primary method)
+    Storage: Browser IndexedDB (Primary Local Store), Nostr Relays (Synchronization & Canonical Source)
+    (Potential Future Consideration): CRDT library for more advanced conflict resolution if simple merging becomes insufficient.
 
-**6. Architecture Overview**
+6. Architecture Overview
 
-The application will consist of several key client-side modules:
+    UI Layer: Svelte components rendering data primarily read from the Local Data Service. Styled with Tailwind/DaisyUI.
+    Local Data Service (IndexedDB): Manages storing, retrieving, querying, and updating Nostr events (lists, profiles, notes) and computed hierarchy structures within IndexedDB. Acts as the main data source for the UI and state stores. Replaces the previous "Cache Service" concept.
+    Hierarchy Service: Builds the nested tree structure from data retrieved via the Local Data Service. May store computed results back into IndexedDB for performance.
+    NDK Service: Wrapper for the NDK instance, focused on communication with relays for synchronization purposes (fetching updates, publishing changes). Triggered by the Synchronization Logic.
+    Synchronization Logic: Orchestrates the flow of data between the NDK Service (network) and the Local Data Service (local store). Fetches updates, compares data, triggers local updates, and (later) manages the outgoing publish queue.
+    State Stores: Svelte stores holding readily accessible application state (e.g., login status, current hierarchy view derived from Local Data Service).
 
-* **UI Layer:** Svelte components responsible for rendering the interface. Styled using Tailwind CSS, leveraging Skeleton for layout, themes, and basic components. Includes the custom Tree View component.
-* **Hierarchy Service:** JavaScript/TypeScript logic responsible for fetching list data (via NDK/Cache), parsing NIP-51 tags, resolving list-to-list references (via 'a' tags), building the in-memory tree structure, and managing expand/collapse state. Will implement lazy loading for performance.
-* **NDK Service:** A wrapper/manager for the NDK instance. Handles initialization, relay connections, subscriptions (if used), event fetching (`WorkspaceEvent`, `WorkspaceEvents`, `WorkspaceProfile`, resolving 'a' tag coordinates), event publishing (`event.publish()`), and integration with the NIP-07 signer and NIP-04 functions (when private items are implemented).
-* **Cache Service:** A helper module abstracting IndexedDB operations for storing and retrieving cached Nostr events (lists, profiles, notes).
+7. Key Implementation Details & Challenges
 
-**7. Key Implementation Details & Challenges**
+    Hierarchical Tree View: (No change - custom component needed).
+    NIP-51 Compliance: (No change - use 'a' tags for lists).
+    Hierarchy Logic: (No change - builds tree, handles cycles/depth). Now reads primarily from Local Data Service.
+    Data Persistence & Sync: The application must treat IndexedDB as the primary source for UI rendering. All viewed/relevant data needs local persistence. The synchronization logic needs to efficiently query relays for updates since the last sync (potentially using since filters) and intelligently merge data (using created_at for replaceables, potentially more complex logic for list item additions/removals later). Initial focus is on read sync (updating local from network). Write sync (local to network) adds significant complexity around queuing, signing, publishing, and conflict handling.
+    Offline Capability: Core Browse must function using only data present in IndexedDB. UI elements triggering network actions (e.g., "Refresh from Relays", "Publish Changes") should be disabled or provide appropriate feedback when offline.
+    IndexedDB Performance: Efficient querying and indexing within IndexedDB will be important as data grows.
+    NIP-07 Flow: (No change).
 
-* **Hierarchical Tree View:** This core UI component needs **custom development** using Svelte. It must handle recursive rendering of nodes, manage expand/collapse state efficiently, and integrate lazy loading (fetching child list data only when a node is expanded). Styling will be done using Tailwind utility classes, potentially leveraging Skeleton's design tokens/themes.
-* **NIP-51 Compliance:** Strict adherence to NIP-51 structure is crucial. Correct use of kinds (1xxxx, 3xxxx), tags ('p', 'e', **'a' for list refs**, 'd'), and replaceable event logic is required. **Support for NIP-04 encryption/decryption** (likely via NDK/NIP-07 helpers) for handling private items stored in the `.content` field is planned post-MVP.
-* **Hierarchy Logic:** The `hierarchyService` needs robust logic to parse list tags, specifically looking for **'a' tags** that represent coordinates (`kind:pubkey:dTag?`) to other NIP-51 list events. It must resolve these coordinates and fetch the referenced lists recursively via NDK/Cache, build the tree, and prevent infinite loops from circular references (e.g., implement a max depth limit).
-* **Performance:** Lazy loading of list content upon expansion is critical. Effective IndexedDB caching strategy is needed to minimize redundant fetches from relays. Consider virtualization for the tree view *if* performance becomes an issue with very large/deep structures (post-MVP).
-* **NIP-07 Flow:** Ensure a smooth user experience for connecting via NIP-07 and handling potential errors (extension not installed, user rejection). Ensure necessary permissions (`nip04_encrypt`/`nip04_decrypt`) are requested when implementing private items.
+8. Getting Started (Initial Setup)
 
-**8. Getting Started (Initial Setup)**
+    (No major change, but emphasis shifts to setting up IndexedDB service early).
 
-1.  Scaffold project: `npm create svelte@latest my-nostr-lister` (use Skeleton template).
-2.  Install dependencies: `npm install`
-3.  Add Tailwind: `npx svelte-add@latest tailwindcss` (if not included in template).
-4.  Install NDK: `npm install @nostr-dev-kit/ndk`
-5.  Configure Skeleton theme/plugins in `tailwind.config.cjs` and `app.html`.
-6.  Begin implementing NIP-07 connection and basic NDK fetching.
+9. Future Considerations (Post-MVP)
 
-**9. Future Considerations (Post-MVP)**
-
-* Implement Private List Item support (NIP-04).
-* Search/filtering within the list hierarchy.
-* Drag-and-drop interface for reordering lists/items.
-* Real-time updates via NDK subscriptions.
-* More sophisticated item previews (e.g., link previews, image previews).
-* Alternative view modes (e.g., Miller Columns).
-* Import/Export functionality.
+    Implement robust Write Sync (Queuing, Publishing, Conflict Resolution).
+    Implement Private List Item support (NIP-04).
+    Real-time updates via NDK subscriptions (updating IndexedDB, then UI).
+    More sophisticated sync strategies (background sync?).
+    Data backup/export options from IndexedDB.
+    Consider CRDTs if complex collaborative editing or multi-device sync without conflicts is desired.

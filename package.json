@@ -9,22 +9,28 @@
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:ui": "vitest --ui"
 	},
 	"devDependencies": {
-		"@skeletonlabs/skeleton": "^3.1.2",
-		"@skeletonlabs/tw-plugin": "^0.4.1",
 		"@sveltejs/adapter-auto": "^4.0.0",
 		"@sveltejs/kit": "^2.16.0",
 		"@sveltejs/vite-plugin-svelte": "^5.0.0",
 		"@types/node": "^22.14.0",
+		"@vitest/ui": "^3.1.1",
 		"autoprefixer": "^10.4.21",
+		"daisyui": "^5.0.13",
+		"fake-indexeddb": "^6.0.0",
+		"jsdom": "^26.0.0",
 		"postcss": "^8.5.3",
 		"svelte": "^5.0.0",
 		"svelte-check": "^4.0.0",
-		"tailwindcss": "^3.4.0",
+		"tailwindcss": "^3.4.3",
 		"typescript": "^5.0.0",
-		"vite": "^6.2.5"
+		"vite": "^6.2.5",
+		"vitest": "^3.1.1"
 	},
 	"pnpm": {
 		"onlyBuiltDependencies": [
@@ -32,6 +38,7 @@
 		]
 	},
 	"dependencies": {
-		"@nostr-dev-kit/ndk": "2.13.1-rc4"
+		"@nostr-dev-kit/ndk": "2.13.1-rc4",
+		"dexie": "^4.0.11"
 	}
 }
