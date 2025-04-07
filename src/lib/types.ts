@@ -10,4 +10,5 @@ export interface TreeNodeData {
     items: Array<{ type: 'p' | 'e'; value: string; relayHint?: string }>; // Specific p/e items
     dTag?: string;    // Optional 'd' tag identifier
     // Add other NDKEvent properties if needed for display or logic later
+    eventId: string; // The actual Nostr event ID of the list version being displayed
 } 

@@ -5,6 +5,7 @@
   import { listHierarchy, isHierarchyLoading } from '$lib/hierarchyStore';
   import { buildHierarchy } from '$lib/hierarchyService';
   import { get } from 'svelte/store';
+  import { refreshTrigger } from '$lib/refreshStore'; // <-- Import refresh trigger
   // import { Button } from '@skeletonlabs/skeleton'; // Removed Skeleton import
   import { NDKEvent, type NDKUser, type NDKUserProfile, type NDKFilter } from '@nostr-dev-kit/ndk';
   import TreeNode from '$lib/components/TreeNode.svelte'; // Import the new component
@@ -19,6 +20,19 @@
 
   // Mock data for testing TreeNode with nesting
   // const mockNestedNodeData: TreeNodeData = { ... };
+
+  // ---- Refresh Trigger Subscription ----
+  refreshTrigger.subscribe(value => {
+    if (value > 0) { // Only trigger if incremented (initial value 0)
+      const currentUser = get(user);
+      if (currentUser?.pubkey && !isSyncing && !isLoadingInitialLists && !$isHierarchyLoading) {
+        console.log('Refresh triggered! Reloading data...');
+        // Re-use the main data loading function
+        loadDataAndBuildHierarchy(currentUser.pubkey);
+      }
+    }
+  });
+  // -------------------------------------
 
   async function handleLogin() {
     const ndkInstance = get(ndk);

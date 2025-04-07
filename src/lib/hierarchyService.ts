@@ -56,6 +56,7 @@ export function transformStoredEventToNode(event: StoredEvent): TreeNodeData {
         children,
         items, // Add the extracted items
         dTag, // Include dTag if it exists
+        eventId: event.id // Add the actual event ID
         // rawEvent: event // Removed to match TreeNodeData type
     };
 }
