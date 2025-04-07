@@ -237,6 +237,29 @@ export class NostrLocalDB extends Dexie {
 
 	// --- Query Methods (L1.3) ---
 
+	/**
+	 * Retrieves the timestamp of the latest known event for a given pubkey.
+	 * Used to determine the `since` filter for fetching new events.
+	 * @param pubkey The public key of the author.
+	 * @returns A promise that resolves to the `created_at` timestamp of the latest event, or 0 if none found.
+	 */
+	async getLatestEventTimestamp(pubkey: string): Promise<number> {
+		try {
+			// Filter by pubkey first (uses index), then sort the results in memory.
+			const sortedEvents = await this.events
+				.where('pubkey').equals(pubkey)
+				.sortBy('created_at'); // Sorts ascending
+
+			// The latest event will be the last one in the sorted array.
+			const latestEvent = sortedEvents.length > 0 ? sortedEvents[sortedEvents.length - 1] : undefined;
+
+			return latestEvent?.created_at ?? 0; // Return its timestamp or 0 if no events exist
+		} catch (error) {
+			console.error(`Failed to get latest event timestamp for pubkey ${pubkey}:`, error);
+			return 0; // Return 0 on error
+		}
+	}
+
 	async getEventById(id: string): Promise<StoredEvent | undefined> {
 		return await this.events.get(id);
 	}

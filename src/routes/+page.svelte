@@ -12,6 +12,7 @@
   import type { TreeNodeData } from '$lib/types'; // Import the type
   import { localDb, type StoredEvent } from '$lib/localDb'; // Import localDb AND StoredEvent type
   import CreateListModal from '$lib/components/CreateListModal.svelte'; // Import the modal component
+  import { browser } from '$app/environment'; // Import browser
 
   let isLoadingProfile: boolean = false;
   let isLoadingInitialLists: boolean = false; // New state for the initial network fetch
@@ -279,174 +280,148 @@
 
   // ---- IMPLEMENTED SYNC HANDLER ----
   async function handleSync() {
-      console.log("Starting manual sync...");
-      isSyncing = true;
-      const ndkInstance = get(ndk);
-      const userPubkey = get(user)?.pubkey;
-      let refreshNeeded = false; // Flag to check if refresh is needed after sync ops
+      if (isSyncing || !browser) return;
+      console.log('Starting sync process...');
+      isSyncing = true; // [cite: 1191]
+      let refreshNeeded = false; // Initialize refresh flag here [cite: 1191]
 
+      // Get pubkey early for both phases
+      const userPubkey = get(user)?.pubkey;
       if (!userPubkey) {
-          console.error("Sync failed: User not logged in.");
-          isSyncing = false;
-          return;
-      }
-       if (!ndkInstance) {
-          console.error("Sync failed: NDK instance not available.");
-          isSyncing = false;
+          console.error('User not logged in, cannot sync.');
+          isSyncing = false; // Ensure state is reset
+          // TODO: Maybe show a user-friendly message?
           return;
       }
 
       try {
-          // --- Part 1: Fetch and Store Incoming Events --- 
+          // -----------------------------------------------
+          // Sync Phase 1: Fetch Incoming Events
+          // -----------------------------------------------
           console.log("Sync Phase 1: Fetching incoming events...");
-          // 1. Determine 'since' timestamp (Reverting to fetching all and sorting)
-          // Use Promise.all to fetch all relevant event and profile data concurrently
-          const [allUserEvents, allUserProfiles] = await Promise.all([
-             localDb.events.where({ pubkey: userPubkey }).toArray(),
-             localDb.profiles.where({ pubkey: userPubkey }).toArray()
-          ]);
-
-          // Sort in code to find the latest
-          allUserEvents.sort((a, b) => b.created_at - a.created_at);
-          allUserProfiles.sort((a, b) => b.created_at - a.created_at);
-
-          const latestEventResult = allUserEvents[0]; // Undefined if array is empty
-          const latestProfileResult = allUserProfiles[0]; // Undefined if array is empty
-
-          const latestLocalTimestamp = Math.max(
-              latestEventResult?.created_at || 0,
-              latestProfileResult?.created_at || 0
-          );
-
-          // Fetch events strictly newer than the latest we have locally
-          const sinceFilter = latestLocalTimestamp > 0 ? latestLocalTimestamp + 1 : undefined;
-          console.log(`Syncing events since timestamp: ${sinceFilter ?? 'beginning'}`);
-
-          // 2. Define Sync Filters (Profile and Lists)
-           const syncFilter: NDKFilter = {
-                authors: [userPubkey],
-                kinds: [
-                    0, // Profile
-                    10000, // Mute List
-                    10001, // Pin List
-                    30000, // Follow Set
-                    30001, // Categorized People List
-                    30003, // Categorized Bookmark List
-                    // Add any other kinds you want to sync here
-                ],
-                since: sinceFilter,
-           };
-          // console.log("Using sync filter:", syncFilter);
-
-          // 3. Fetch Updates
-          await ndkInstance.connect(); // Ensure connection
-          const fetchedEventsSet = await ndkInstance.fetchEvents(syncFilter);
-          console.log(`Fetched ${fetchedEventsSet.size} new/updated events from network.`);
-
-          // 4. Store Updates if any were found
-          if (fetchedEventsSet.size > 0) {
-                refreshNeeded = true; // Incoming events mean refresh might be needed
-                const eventsToStore: NDKEvent[] = Array.from(fetchedEventsSet);
-                const storePromises: Promise<void>[] = [];
-
-                for (const event of eventsToStore) {
-                    // Convert NDKEvent to StoredEvent format for DB methods
-                    // IMPORTANT: Incoming events from network *don't* set 'published: false'
-                    const storedEventData: StoredEvent = {
-                        id: event.id,
-                        kind: event.kind,
-                        pubkey: event.pubkey,
-                        created_at: event.created_at ?? 0,
-                        tags: event.tags,
-                        content: event.content,
-                        sig: event.sig ?? '',
-                        dTag: event.kind >= 30000 && event.kind < 40000 ? event.tags.find(t => t[0] === 'd')?.[1] : undefined,
-                        // published: undefined // Leave undefined for network events
-                    };
-
-                    if (event.kind === 0) {
-                        storePromises.push(localDb.addOrUpdateProfile(storedEventData));
-                    } else {
-                        storePromises.push(localDb.addOrUpdateEvent(storedEventData));
-                    }
-                }
-
-                await Promise.all(storePromises);
-                console.log(`Processed ${eventsToStore.length} fetched events for local DB update.`);
-          } else {
-                console.log("No new events found during sync.");
+          const ndkInstance = get(ndk);
+          if (!ndkInstance) {
+              console.error('NDK instance not available.');
+              throw new Error('NDK not initialized'); // Throw to prevent proceeding
           }
-          console.log("Sync Phase 1 Complete.");
 
-          // --- Part 2: Publish Outgoing Events (L6.2) --- 
-          console.log("Sync Phase 2: Publishing outgoing events...");
-          const unpublishedEvents: StoredEvent[] = await localDb.getUnpublishedEvents(userPubkey);
+          // Get the timestamp of the latest known event from the DB to fetch only newer events
+          // Assuming getLatestEventTimestamp exists as per L6.1 work
+          const latestTimestamp = await localDb.getLatestEventTimestamp(userPubkey);
+          console.log(`Latest known event timestamp: ${latestTimestamp}`);
 
-          if (unpublishedEvents.length > 0) {
-             console.log(`Attempting to publish ${unpublishedEvents.length} unpublished events...`);
-             let publishedCount = 0;
+          // Define filter for NIP-51 list events for the user since the last sync
+          const filter: NDKFilter = {
+              authors: [userPubkey],
+              kinds: [30000, 30001], // Kind 30000 (Categorized People List), 30001 (Categorized Bookmark List)
+              ...(latestTimestamp && { since: latestTimestamp + 1 }) // Fetch events strictly newer
+          };
 
-             for (const storedEvent of unpublishedEvents) {
-                 // Reconstruct NDKEvent from StoredEvent to publish
-                 const eventToPublish = new NDKEvent(ndkInstance);
-                 eventToPublish.id = storedEvent.id;
-                 eventToPublish.kind = storedEvent.kind;
-                 eventToPublish.pubkey = storedEvent.pubkey;
-                 eventToPublish.created_at = storedEvent.created_at;
-                 eventToPublish.tags = storedEvent.tags;
-                 eventToPublish.content = storedEvent.content;
-                 eventToPublish.sig = storedEvent.sig;
+          console.log('Fetching events with filter:', filter);
+          const fetchedEvents = await ndkInstance.fetchEvents(filter);
+          console.log(`Fetched ${fetchedEvents.size} new NIP-51 events.`);
 
-                 // Sanity check: Ensure event has a signature before publishing
-                 if (!eventToPublish.sig) {
-                     console.warn(`Skipping publish for event ${eventToPublish.id}: Missing signature.`);
-                     continue; // Skip to the next event
-                 }
 
-                 try {
-                     console.log(`Publishing event ${eventToPublish.id} (Kind: ${eventToPublish.kind}, Created: ${new Date(eventToPublish.created_at * 1000).toISOString()})...`);
-                     // NDK's publish method sends the event to connected relays
-                     const publishedToRelays = await ndkInstance.publish(eventToPublish);
-
-                     if (publishedToRelays.size > 0) {
-                         console.log(`Successfully published event ${eventToPublish.id} to ${publishedToRelays.size} relays.`);
-                         // Mark as published locally ON SUCCESS
-                         await localDb.markEventAsPublished(eventToPublish.id);
-                         publishedCount++;
-                         refreshNeeded = true; // Published events might change UI state implicitly (e.g., if a new list becomes visible)
-                     } else {
-                         console.warn(`Failed to publish event ${eventToPublish.id} to any relays (or NDK couldn't confirm). Will retry next sync.`);
-                         // Do not mark as published if it failed
-                     }
-                 } catch (publishErr) {
-                      console.error(`Error publishing event ${eventToPublish.id}:`, publishErr);
-                      // Do not mark as published on error
-                 }
-             } // end for loop
-             console.log(`Finished publishing attempt. Successfully published ${publishedCount} out of ${unpublishedEvents.length} events.`);
+          if (fetchedEvents.size > 0) {
+              refreshNeeded = true; // Mark refresh needed if we got new events
+              // Process and store fetched events individually using addOrUpdateEvent
+              let processedCount = 0;
+              for (const event of fetchedEvents) {
+                  const storedEventData: StoredEvent = {
+                      id: event.id,
+                      pubkey: event.pubkey,
+                      created_at: event.created_at,
+                      kind: event.kind,
+                      tags: event.tags,
+                      content: event.content,
+                      sig: event.sig ?? '', // Ensure sig is string, default to empty
+                      published: true, // Events fetched from relays are considered published
+                      dTag: event.kind >= 30000 && event.kind < 40000 ? event.tags.find(t => t[0] === 'd')?.[1] : undefined,
+                  };
+                  await localDb.addOrUpdateEvent(storedEventData);
+                  processedCount++;
+              }
+              console.log(`Stored/Updated ${processedCount} events in local DB.`);
           } else {
-             console.log("No unpublished events found to publish.");
+              console.log("No new incoming events found.");
           }
-           console.log("Sync Phase 2 Complete.");
 
-          // --- Part 3: Final UI Refresh (if needed) --- 
-          // Refresh if incoming events were processed OR if events were successfully published
+          console.log("Sync Phase 1 Complete."); // [cite: 1218]
+
+          // -----------------------------------------------
+          // Sync Phase 2: Publish Outgoing Unpublished Events
+          // -----------------------------------------------
+          console.log("Sync Phase 2: Publishing outgoing events..."); // [cite: 1219]
+          let publishedSomething = false; // Track if any publish succeeded in this phase
+
+          const unpublishedEvents: StoredEvent[] = await localDb.getUnpublishedEvents(userPubkey); // [cite: 1220]
+
+          if (unpublishedEvents.length > 0) { // [cite: 1221]
+              console.log(`Attempting to publish ${unpublishedEvents.length} unpublished events...`);
+              for (const storedEvent of unpublishedEvents) {
+                  try {
+                      // Reconstruct NDKEvent
+                      const eventToPublish = new NDKEvent(ndkInstance);
+                      eventToPublish.id = storedEvent.id;
+                      eventToPublish.sig = storedEvent.sig;
+                      eventToPublish.kind = storedEvent.kind;
+                      eventToPublish.pubkey = storedEvent.pubkey;
+                      eventToPublish.created_at = storedEvent.created_at;
+                      eventToPublish.content = storedEvent.content;
+                      eventToPublish.tags = storedEvent.tags;
+
+                      // Sanity Check Signature
+                      if (!eventToPublish.sig) { // [cite: 1224]
+                          console.warn(`Skipping event ${storedEvent.id}: Missing signature. Cannot publish.`);
+                          continue; // Skip this event
+                      }
+
+                      // Publish Attempt
+                      console.log(`Publishing event ${eventToPublish.id} (kind: ${eventToPublish.kind})...`);
+                      const publishedToRelays = await ndkInstance.publish(eventToPublish); // [cite: 1225]
+
+                      // Check Success
+                      if (publishedToRelays.size > 0) { // [cite: 1226]
+                          console.log(`Successfully published event ${eventToPublish.id} to ${publishedToRelays.size} relays.`);
+                          await localDb.markEventAsPublished(eventToPublish.id); // [cite: 1228]
+                          console.log(`Marked event ${eventToPublish.id} as published in local DB.`);
+                          publishedSomething = true; // Flag that at least one publish succeeded
+                      } else {
+                          console.warn(`Failed to publish event ${eventToPublish.id} to any connected write relays.`); // [cite: 1229]
+                      }
+                  } catch (publishError) {
+                      console.error(`Error publishing or marking event ${storedEvent.id}:`, publishError); // [cite: 1230]
+                  }
+              }
+              console.log(`Finished publishing attempt for ${unpublishedEvents.length} events.`); // [cite: 1231]
+          } else {
+              console.log("No unpublished events found to publish."); // [cite: 1232]
+          }
+
+          if (publishedSomething) {
+              refreshNeeded = true; // Mark refresh needed if we published anything [cite: 1191, 1228]
+          }
+
+          console.log("Sync Phase 2 Complete."); // [cite: 1232]
+
+          // --------------------
+          // Data Refresh
+          // --------------------
           if (refreshNeeded) {
-            console.log("Sync operations modified data, triggering final UI refresh...");
-            await loadDataAndBuildHierarchy(userPubkey);
-            console.log("UI refresh completed after sync operations.");
+              console.log("Data changed during sync, reloading hierarchy...");
+              await loadDataAndBuildHierarchy(userPubkey);
           } else {
-             console.log("No data changes detected during sync, skipping final UI refresh.");
+              console.log("No data changes detected during sync.");
           }
+          // --------------------
 
-          console.log("Sync process completed successfully.");
+          console.log('Sync process completed successfully.');
 
       } catch (error) {
-          console.error("Error during handleSync phases:", error);
-          // Optionally add user feedback here (e.g., toast notification)
+          console.error('Error during sync process:', error);
       } finally {
-          isSyncing = false;
-          console.log("Sync state reset.");
+          isSyncing = false; // [cite: 1238]
+          console.log('Sync process finished (finally block).');
       }
   }
   // ---- END SYNC HANDLER ----
