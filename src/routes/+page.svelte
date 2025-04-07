@@ -6,13 +6,15 @@
   import { buildHierarchy } from '$lib/hierarchyService';
   import { get } from 'svelte/store';
   // import { Button } from '@skeletonlabs/skeleton'; // Removed Skeleton import
-  import type { NDKUser, NDKUserProfile, NDKEvent, NDKFilter } from '@nostr-dev-kit/ndk';
+  import { NDKEvent, type NDKUser, type NDKUserProfile, type NDKFilter } from '@nostr-dev-kit/ndk';
   import TreeNode from '$lib/components/TreeNode.svelte'; // Import the new component
   import type { TreeNodeData } from '$lib/types'; // Import the type
   import { localDb, type StoredEvent } from '$lib/localDb'; // Import localDb AND StoredEvent type
+  import CreateListModal from '$lib/components/CreateListModal.svelte'; // Import the modal component
 
   let isLoadingProfile: boolean = false;
   let isLoadingInitialLists: boolean = false; // New state for the initial network fetch
+  let isSyncing: boolean = false; // Add state for sync process
   let lastLoadedPubkey: string | null = null; // Guard against multiple triggers
 
   // Mock data for testing TreeNode with nesting
@@ -39,6 +41,7 @@
           isHierarchyLoading.set(false);
           isLoadingInitialLists = false;
           isLoadingProfile = false;
+          isSyncing = false;
           lastLoadedPubkey = null; // Reset guard on new user login
       }
       user.set(loggedInUser); // This triggers reactive blocks
@@ -200,84 +203,275 @@
     }
 }
 
-  // Refactored Reactive Block with Guard
+  // ---- REFACTORED DATA LOADING FUNCTION ----
+  async function loadDataAndBuildHierarchy(pubkey: string) {
+      console.log(`Initiating data load and hierarchy build for pubkey: ${pubkey}`);
+      // Reset loading states for the new user load or refresh
+      isLoadingProfile = true; // Assume profile needs loading initially
+      isLoadingInitialLists = true;
+      isHierarchyLoading.set(true);
+      listHierarchy.set([]); // Clear old hierarchy
+      profile.set(null); // Clear old profile before loading new one
+
+      try {
+          // 1. Load User Profile (manages isLoadingProfile internally now)
+          // We await this individually to ensure profile is available sooner potentially
+          await loadUserProfile(pubkey);
+
+          // 2. Fetch Lists from Network, then Build Hierarchy
+          // Note: This step still fetches *all* lists initially, sync fetches only newer ones
+          await fetchAndStoreUserLists(pubkey);
+
+          // 3. Build Hierarchy from DB after fetching/storing
+          console.log("List fetch/store complete. Now building hierarchy from DB for:", pubkey);
+          const usersLists: StoredEvent[] = await localDb.getUsersNip51Lists(pubkey);
+          console.log(`Found ${usersLists.length} lists in local DB for hierarchy.`);
+          if (usersLists.length > 0) {
+              const hierarchy = await buildHierarchy(usersLists);
+              console.log('Hierarchy built (structure hidden for brevity)');
+              // Check if we are still processing the same user before setting store
+              const currentLoggedInPubkey = get(user)?.pubkey;
+              if (currentLoggedInPubkey === pubkey) {
+                   listHierarchy.set(hierarchy);
+                   console.log('Hierarchy store updated.');
+              } else {
+                  console.log("User changed during hierarchy build, discarding results.");
+              }
+          } else {
+              const currentLoggedInPubkey = get(user)?.pubkey;
+              if (currentLoggedInPubkey === pubkey) listHierarchy.set([]);
+              console.log("No lists found in DB, setting empty hierarchy.");
+          }
+      } catch (error) {
+            console.error("Error during loadDataAndBuildHierarchy:", error);
+            const currentLoggedInPubkey = get(user)?.pubkey;
+            // Reset hierarchy on error only if it's for the current user
+            if (currentLoggedInPubkey === pubkey) listHierarchy.set([]);
+      } finally {
+            // Reset flags only if we are still on the same user
+            const currentLoggedInPubkey = get(user)?.pubkey;
+            if (currentLoggedInPubkey === pubkey) {
+                 // isLoadingProfile is handled internally by loadUserProfile
+                 isLoadingInitialLists = false;
+                 isHierarchyLoading.set(false);
+                 console.log("Data load and hierarchy build process finished for:", pubkey);
+            } else {
+                 console.log("User changed during finally block of load/build, flags not reset.");
+            }
+      }
+  }
+  // ---- END REFACTORED FUNCTION ----
+
+
+  // ---- IMPLEMENTED SYNC HANDLER ----
+  async function handleSync() {
+      console.log("Starting manual sync...");
+      isSyncing = true;
+      const ndkInstance = get(ndk);
+      const userPubkey = get(user)?.pubkey;
+      let refreshNeeded = false; // Flag to check if refresh is needed after sync ops
+
+      if (!userPubkey) {
+          console.error("Sync failed: User not logged in.");
+          isSyncing = false;
+          return;
+      }
+       if (!ndkInstance) {
+          console.error("Sync failed: NDK instance not available.");
+          isSyncing = false;
+          return;
+      }
+
+      try {
+          // --- Part 1: Fetch and Store Incoming Events --- 
+          console.log("Sync Phase 1: Fetching incoming events...");
+          // 1. Determine 'since' timestamp (Corrected Linter Error)
+          const sortedEvents = await localDb.events
+              .where({ pubkey: userPubkey })
+              .sortBy('created_at');
+          const latestEvent = sortedEvents.length > 0 ? sortedEvents[sortedEvents.length - 1] : undefined;
+
+          const sortedProfiles = await localDb.profiles
+              .where({ pubkey: userPubkey })
+              .sortBy('created_at');
+          const latestProfile = sortedProfiles.length > 0 ? sortedProfiles[sortedProfiles.length - 1] : undefined;
+
+          const latestLocalTimestamp = Math.max(
+              latestEvent?.created_at || 0,
+              latestProfile?.created_at || 0
+          );
+
+          // Fetch events strictly newer than the latest we have locally
+          const sinceFilter = latestLocalTimestamp > 0 ? latestLocalTimestamp + 1 : undefined;
+          console.log(`Syncing events since timestamp: ${sinceFilter ?? 'beginning'}`);
+
+          // 2. Define Sync Filters (Profile and Lists)
+           const syncFilter: NDKFilter = {
+                authors: [userPubkey],
+                kinds: [
+                    0, // Profile
+                    10000, // Mute List
+                    10001, // Pin List
+                    30000, // Follow Set
+                    30001, // Categorized People List
+                    30003, // Categorized Bookmark List
+                    // Add any other kinds you want to sync here
+                ],
+                since: sinceFilter,
+           };
+          // console.log("Using sync filter:", syncFilter);
+
+          // 3. Fetch Updates
+          await ndkInstance.connect(); // Ensure connection
+          const fetchedEventsSet = await ndkInstance.fetchEvents(syncFilter);
+          console.log(`Fetched ${fetchedEventsSet.size} new/updated events from network.`);
+
+          // 4. Store Updates if any were found
+          if (fetchedEventsSet.size > 0) {
+                refreshNeeded = true; // Incoming events mean refresh might be needed
+                const eventsToStore: NDKEvent[] = Array.from(fetchedEventsSet);
+                const storePromises: Promise<void>[] = [];
+
+                for (const event of eventsToStore) {
+                    // Convert NDKEvent to StoredEvent format for DB methods
+                    // IMPORTANT: Incoming events from network *don't* set 'published: false'
+                    const storedEventData: StoredEvent = {
+                        id: event.id,
+                        kind: event.kind,
+                        pubkey: event.pubkey,
+                        created_at: event.created_at ?? 0,
+                        tags: event.tags,
+                        content: event.content,
+                        sig: event.sig ?? '',
+                        dTag: event.kind >= 30000 && event.kind < 40000 ? event.tags.find(t => t[0] === 'd')?.[1] : undefined,
+                        // published: undefined // Leave undefined for network events
+                    };
+
+                    if (event.kind === 0) {
+                        storePromises.push(localDb.addOrUpdateProfile(storedEventData));
+                    } else {
+                        storePromises.push(localDb.addOrUpdateEvent(storedEventData));
+                    }
+                }
+
+                await Promise.all(storePromises);
+                console.log(`Processed ${eventsToStore.length} fetched events for local DB update.`);
+          } else {
+                console.log("No new events found during sync.");
+          }
+          console.log("Sync Phase 1 Complete.");
+
+          // --- Part 2: Publish Outgoing Events --- 
+          console.log("Sync Phase 2: Publishing outgoing events...");
+          const unpublishedEvents = await localDb.getUnpublishedEvents(userPubkey);
+
+          if (unpublishedEvents.length > 0) {
+             console.log(`Attempting to publish ${unpublishedEvents.length} unpublished events...`);
+             let publishedCount = 0;
+
+             for (const storedEvent of unpublishedEvents) {
+                 // Reconstruct NDKEvent from StoredEvent to publish
+                 const ndkEventToPublish = new NDKEvent(ndkInstance);
+                 ndkEventToPublish.id = storedEvent.id;
+                 ndkEventToPublish.kind = storedEvent.kind;
+                 ndkEventToPublish.pubkey = storedEvent.pubkey;
+                 ndkEventToPublish.created_at = storedEvent.created_at;
+                 ndkEventToPublish.tags = storedEvent.tags;
+                 ndkEventToPublish.content = storedEvent.content;
+                 ndkEventToPublish.sig = storedEvent.sig;
+
+                 // Sanity check: Ensure event has a signature before publishing
+                 if (!ndkEventToPublish.sig) {
+                     console.warn(`Skipping publish for event ${ndkEventToPublish.id}: Missing signature.`);
+                     continue;
+                 }
+
+                 try {
+                     console.log(`Publishing event ${ndkEventToPublish.id} (Kind: ${ndkEventToPublish.kind})...`);
+                     // NDK's publish method sends the event to connected relays
+                     const publishedToRelays = await ndkInstance.publish(ndkEventToPublish);
+
+                     if (publishedToRelays.size > 0) {
+                         console.log(`Successfully published event ${ndkEventToPublish.id} to ${publishedToRelays.size} relays.`);
+                         // Mark as published locally ON SUCCESS
+                         await localDb.markEventAsPublished(ndkEventToPublish.id);
+                         publishedCount++;
+                         refreshNeeded = true; // Published events might change UI state implicitly
+                     } else {
+                         console.warn(`Failed to publish event ${ndkEventToPublish.id} to any relays (or NDK couldn't confirm). Will retry next sync.`);
+                         // Do not mark as published if it failed
+                     }
+                 } catch (publishErr) {
+                      console.error(`Error publishing event ${ndkEventToPublish.id}:`, publishErr);
+                      // Do not mark as published on error
+                 }
+             } // end for loop
+             console.log(`Finished publishing attempt. Successfully published ${publishedCount} out of ${unpublishedEvents.length} events.`);
+          } else {
+             console.log("No unpublished events found to publish.");
+          }
+           console.log("Sync Phase 2 Complete.");
+
+          // --- Part 3: Final UI Refresh (if needed) --- 
+          if (refreshNeeded) {
+            console.log("Sync operations modified data, triggering final UI refresh...");
+            await loadDataAndBuildHierarchy(userPubkey);
+            console.log("UI refresh completed after sync operations.");
+          } else {
+             console.log("No data changes detected during sync, skipping final UI refresh.");
+          }
+
+          console.log("Sync process completed successfully.");
+
+      } catch (error) {
+          console.error("Error during handleSync phases:", error);
+          // Optionally add user feedback here (e.g., toast notification)
+      } finally {
+          isSyncing = false;
+          console.log("Sync state reset.");
+      }
+  }
+  // ---- END SYNC HANDLER ----
+
+  // Function to handle refresh after list creation
+  function handleListCreated() {
+    console.log("Modal dispatched 'listcreated', refreshing data...");
+    const currentPubkey = get(user)?.pubkey;
+    if (currentPubkey) {
+      // Trigger the existing data load function
+      loadDataAndBuildHierarchy(currentPubkey);
+    } else {
+      console.warn("Tried to refresh list after creation, but user is no longer logged in?");
+    }
+  }
+
+  // Refactored Reactive Block using the new function
   $: {
       const currentPubkey = $user?.pubkey;
 
       if (currentPubkey) {
-          // Only proceed if this pubkey hasn't been processed yet in this session
+          // Only proceed if this pubkey hasn't been processed yet for the initial load
           if (currentPubkey !== lastLoadedPubkey) {
-                console.log(`Detected new or changed user: ${currentPubkey}. Initiating data load.`);
-                lastLoadedPubkey = currentPubkey; // Set the guard
+                console.log(`Detected new or changed user: ${currentPubkey}. Initiating initial data load.`);
+                lastLoadedPubkey = currentPubkey; // Set the guard for *initial* load
 
-                // Reset loading states for the new user load
-                isLoadingProfile = true; // Assume profile needs loading initially
-                isLoadingInitialLists = true;
-                isHierarchyLoading.set(true);
-                listHierarchy.set([]); // Clear old hierarchy
-                profile.set(null); // Clear old profile before loading new one
-
-                // --- Initiate Loading Processes --- 
-
-                // 1. Load User Profile (manages isLoadingProfile internally now)
-                loadUserProfile(currentPubkey);
-
-                // 2. Fetch Lists from Network, then Build Hierarchy
-                fetchAndStoreUserLists(currentPubkey)
-                    .then(async () => {
-                        console.log("Initial list fetch complete. Now building hierarchy from DB for:", currentPubkey);
-                        try {
-                            const usersLists: StoredEvent[] = await localDb.getUsersNip51Lists(currentPubkey);
-                            console.log(`Found ${usersLists.length} lists in local DB.`);
-                            if (usersLists.length > 0) {
-                                const hierarchy = await buildHierarchy(usersLists);
-                                console.log('Hierarchy built:', hierarchy);
-                                // Check if we are still processing the same user before setting store
-                                if (lastLoadedPubkey === currentPubkey) {
-                                    listHierarchy.set(hierarchy);
-                                    // Log the detailed structure of the result
-                                    console.log(
-                                        'Hierarchy built and stored (STRUCTURE CHECK):',
-                                        JSON.stringify(hierarchy, (key, value) =>
-                                            // Optional: Prevent logging huge rawEvent if it was accidentally included
-                                            // key === 'rawEvent' ? undefined : value
-                                            value // Keep this simple for now
-                                        , 2) // Use 2 spaces for indentation
-                                    );
-                                }
-                            } else {
-                                if (lastLoadedPubkey === currentPubkey) listHierarchy.set([]);
-                            }
-                        } catch(dbOrBuildError) {
-                            console.error("Error fetching from DB or building hierarchy:", dbOrBuildError);
-                            if (lastLoadedPubkey === currentPubkey) listHierarchy.set([]);
-                        }
-                    })
-                    .catch(fetchError => {
-                        console.error("Error during initial list network fetch:", fetchError);
-                         if (lastLoadedPubkey === currentPubkey) listHierarchy.set([]);
-                    })
-                    .finally(() => {
-                         // Reset flags only if we are still on the same user
-                        if (lastLoadedPubkey === currentPubkey) {
-                            isLoadingInitialLists = false;
-                            isHierarchyLoading.set(false);
-                            console.log("List fetch and hierarchy build process finished for:", currentPubkey);
-                        }
-                    });
+                // Call the refactored function for initial load
+                 // No need to await here, it manages its own state async
+                loadDataAndBuildHierarchy(currentPubkey);
           } else {
-             // console.log(`Data load already initiated or completed for user: ${currentPubkey}`);
+             // console.log(`User ${currentPubkey} already processed for initial load.`);
           }
 
       } else {
           // --- Logout Logic --- 
           if (lastLoadedPubkey !== null) { // Only clear if we were previously logged in
-                console.log("User logged out or became null, clearing stores.");
+                console.log("User logged out or became null, clearing states and guard.");
                 profile.set(null);
                 listHierarchy.set([]);
                 isLoadingProfile = false;
                 isLoadingInitialLists = false;
                 isHierarchyLoading.set(false);
+                isSyncing = false; // Reset sync state on logout
                 lastLoadedPubkey = null; // Reset guard
           }
       }
@@ -295,6 +489,9 @@
 
 <div class="container p-4 mx-auto">
   {#if $user}
+    <!-- Render the modal (it's hidden by default) -->
+    <CreateListModal on:listcreated={handleListCreated} />
+
     <!-- Logged In State - Using DaisyUI -->
     <p class="mb-4 text-sm text-base-content/80">Logged In as: <code class="break-all font-mono bg-base-200 px-1 rounded">{$user.npub}</code></p>
 
@@ -375,6 +572,27 @@
         {/if}
     </div>
     <!-- ===== END: List Hierarchy Section ===== -->
+
+    <!-- Action Buttons Area -->
+    <div class="mt-4 flex items-center gap-2">
+        <h2 class="text-xl font-semibold flex-grow">My Lists</h2>
+        <!-- Add Create List Button -->
+        <button class="btn btn-primary btn-sm" on:click={() => (window as any).create_list_modal.showModal()}>
+          Create New List
+        </button>
+        <!-- Existing Sync Button -->
+        <button class="btn btn-secondary btn-sm" on:click={handleSync} disabled={isSyncing || $isHierarchyLoading || isLoadingInitialLists}> <!-- Also disable during initial load -->
+          {#if isSyncing}
+            <span class="loading loading-spinner loading-xs"></span>
+            Syncing...
+          {:else if $isHierarchyLoading || isLoadingInitialLists}
+             <span class="loading loading-spinner loading-xs"></span> <!-- Optional: show spinner during initial load too -->
+             Loading...
+          {:else}
+            Sync from Relays
+          {/if}
+        </button>
+    </div>
 
   {:else}
     <!-- Logged Out State - Using DaisyUI -->
