@@ -1,10 +1,11 @@
 <script lang="ts">
   import { get } from 'svelte/store';
-  import { ndk } from '$lib/ndkStore';
   import { user } from '$lib/userStore';
   import { NDKEvent } from '@nostr-dev-kit/ndk';
   import { createEventDispatcher } from 'svelte'; // Import event dispatcher
   import { localDb, type StoredEvent } from '$lib/localDb'; // Import DB and StoredEvent type
+  import { ndkService } from '$lib/ndkService'; // Added
+  import { nip19 } from 'nostr-tools';
 
   let listName: string = '';
   let isSaving: boolean = false; // To disable button during processing
@@ -25,9 +26,19 @@
       return;
     }
 
-    const ndkInstance = get(ndk);
-    if (!ndkInstance) {
-      errorMessage = 'Error: NDK not initialized.';
+    // Get signer from service
+    const signer = ndkService.getSigner();
+    if (!signer) {
+      errorMessage = 'Signer (e.g., NIP-07 extension) is not available. Cannot create list.';
+      console.error(errorMessage);
+      isSaving = false;
+      return;
+    }
+
+    // Get raw NDK instance from service for event creation
+    const ndkInstanceForEvent = ndkService.getNdkInstance();
+    if (!ndkInstanceForEvent) {
+      errorMessage = 'NDK instance not available for event creation.';
       console.error(errorMessage);
       isSaving = false;
       return;
@@ -41,32 +52,39 @@
     }
 
     // Create the event object
-    const newEvent = new NDKEvent(ndkInstance);
-    newEvent.kind = 30003; // Kind 30003: Bookmark List
-    newEvent.pubkey = currentUser.pubkey;
-    newEvent.created_at = Math.floor(Date.now() / 1000);
-    newEvent.tags = [
+    const event = new NDKEvent(ndkInstanceForEvent);
+    event.kind = 30001; // Kind for Categorized People List (adjust if needed)
+    event.pubkey = currentUser.pubkey;
+    event.created_at = Math.floor(Date.now() / 1000);
+    event.tags = [
         ['d', dTag],
         ['title', dTag]
     ];
-    newEvent.content = '';
+    event.content = '';
 
     console.log('Attempting to sign new list event...');
 
     try {
-      // Sign the event using NIP-07 signer
-      await newEvent.sign();
-      console.log('Signed new list event:', newEvent.rawEvent());
+      // Sign the event via the signer from the service
+      await event.sign(signer);
+      console.log('List event signed:', event);
+
+      // Publish the event via the service
+      const publishedTo = await ndkService.publish(event);
+
+      if (publishedTo.size === 0) {
+        throw new Error('Event was not published to any relays.');
+      }
 
       // --- L7.3: Convert and Save to DB --- 
       const storedEventData: StoredEvent = {
-        id: newEvent.id,
-        kind: newEvent.kind,
-        pubkey: newEvent.pubkey,
-        created_at: newEvent.created_at ?? 0,
-        tags: newEvent.tags,
-        content: newEvent.content,
-        sig: newEvent.sig ?? '',
+        id: event.id,
+        kind: event.kind,
+        pubkey: event.pubkey,
+        created_at: event.created_at ?? 0,
+        tags: event.tags,
+        content: event.content,
+        sig: event.sig ?? '',
         dTag: dTag, // Add dTag explicitly
         published: false // L6.1: Mark newly created list as unpublished
       };

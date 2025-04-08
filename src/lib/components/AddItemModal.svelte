@@ -1,8 +1,11 @@
 <script lang="ts">
     import { createEventDispatcher } from 'svelte';
-    import { get } from 'svelte/store';
-    import { user } from '$lib/userStore';
-    import { ndk } from '$lib/ndkStore';
+    // import { get } from 'svelte/store'; // Remove if only used for ndk
+    // import { ndk } from '$lib/ndkStore'; // Removed
+    import { ndkService } from '$lib/ndkService'; // Added
+    import { NDKEvent, type NDKTag, NDKList } from '@nostr-dev-kit/ndk';
+    import { nip19 } from 'nostr-tools';
+    import { localDb } from '$lib/localDb';
     import { addItemToList, type ListServiceDependencies } from '$lib/listService';
 
     /**
@@ -38,16 +41,37 @@
         isSaving = true;
         errorMessage = null;
 
-        const currentUser = get(user);
-        const ndkInstance = get(ndk);
+        // const currentUser = get(user); // Removed
+        // if (!currentUser) {
+        //     errorMessage = 'User not available. Cannot save item.';
+        //     isSaving = false;
+        //     return;
+        // }
 
-        if (!currentUser || !ndkInstance) {
-            errorMessage = 'User or NDK not available. Cannot save item.';
+        // const ndkInstance = get(ndk); // Removed
+        // if (!ndkInstance) {
+        //     errorMessage = 'NDK instance not available. Cannot save item.';
+        //     isSaving = false;
+        //     return;
+        // }
+
+        // Use NDK Service to get signer
+        const signer = ndkService.getSigner();
+        if (!signer) {
+            errorMessage = 'Signer not available. Cannot save item.';
             isSaving = false;
             return;
         }
 
-        const deps: ListServiceDependencies = { currentUser, ndkInstance };
+        // Use NDK Service to get the underlying NDK instance for event creation
+        const ndkInstanceForEvent = ndkService.getNdkInstance();
+        if (!ndkInstanceForEvent) {
+            errorMessage = 'NDK instance not available for event creation.';
+            isSaving = false;
+            return;
+        }
+
+        const deps: ListServiceDependencies = { currentUser: null, ndkInstance: ndkInstanceForEvent };
         const trimmedInput = itemInput.trim();
 
         try {

@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { get } from 'svelte/store';
-    import { ndk } from '$lib/ndkStore';
+    import { ndkService } from '$lib/ndkService';
     import { localDb, type StoredEvent } from '$lib/localDb';
     import type { NDKEvent } from '@nostr-dev-kit/ndk';
 
@@ -41,24 +41,16 @@
                 return; // Found locally
             }
 
-            // 2. Not Found Locally - Try Network
-            console.debug(`NoteItem (${shortEventId}): Not found locally. Fetching from network...`);
-            const ndkInstance = get(ndk);
-            if (!ndkInstance) {
-                console.error(`NoteItem (${shortEventId}): NDK instance not available for network fetch.`);
-                isLoading = false;
-                return;
-            }
+            // 2. Not found locally - Fetch from Network
+            console.log(`NoteItem (${eventId.substring(0, 6)}): Fetching from network...`);
 
             try {
-                await ndkInstance.connect();
-                console.debug(`NoteItem (${shortEventId}): Calling ndk.fetchEvent for ID: ${eventId}`);
-                // NDK's fetchEvent can take an ID directly or a filter { ids: [eventId] }
-                const fetchedEvent: NDKEvent | null = await ndkInstance.fetchEvent(eventId);
-                console.debug(`NoteItem (${shortEventId}): Network fetch result:`, fetchedEvent);
+                const filter = { ids: [eventId] };
+                // Fetch using service
+                const fetchedEvent = await ndkService.fetchEvent(filter);
 
                 if (fetchedEvent) {
-                    console.debug(`NoteItem (${shortEventId}): Fetched event from network.`);
+                    console.log(`NoteItem (${eventId.substring(0, 6)}): Fetched note from network.`);
                     // 3. Convert NDKEvent to StoredEvent and Save to DB
                     const storedEventData: StoredEvent = {
                         id: fetchedEvent.id,

@@ -69,6 +69,16 @@ export class NostrLocalDB extends Dexie {
 
 	// Method to add/update events (Reviewed L6.1 - existing logic preserves newer local unpublished events)
 	async addOrUpdateEvent(event: StoredEvent): Promise<void> {
+		// *** Add dTag derivation logic here, before any put/delete ***
+		if (event.kind >= 30000 && event.kind < 40000) {
+			const foundDTag = event.tags.find(t => Array.isArray(t) && t.length >= 2 && t[0] === 'd')?.[1];
+			event.dTag = foundDTag; // Set to the found value or undefined if not found
+		} else {
+			// Ensure dTag is undefined for non-parameterized kinds
+			event.dTag = undefined;
+		}
+		// *** End dTag derivation logic ***
+
 		const isNewEventMarkedUnpublished = event.published === false;
 
 		if (isReplaceableKind(event.kind)) {
@@ -77,23 +87,21 @@ export class NostrLocalDB extends Dexie {
 			const keyQuery = this.events.where('[kind+pubkey]');
 			const paramKeyQuery = this.events.where('[kind+pubkey+dTag]');
 
-			if (event.kind >= 30000 && event.kind < 40000 && event.dTag) {
+			// Use the dTag derived above for lookup
+			if (event.kind >= 30000 && event.kind < 40000 && event.dTag) { 
 				const key: [number, string, string] = [event.kind, event.pubkey, event.dTag];
 				existingEvent = await paramKeyQuery.equals(key).first();
 			} else if (event.kind === 0 || event.kind === 3 || (event.kind >= 10000 && event.kind < 20000)) {
 				const key: [number, string] = [event.kind, event.pubkey];
 				existingEvent = await keyQuery.equals(key).first();
 			} else {
-				// This case shouldn't happen for standard replaceable kinds, but handle defensively
 				console.warn(`Replaceable event kind ${event.kind} without specific coordinate handling, attempting simple put.`);
-				// Use transaction for potential update
 				await this.transaction('rw', this.events, async () => {
 					const current = await this.events.get(event.id);
-					// Preserve published status if the incoming event doesn't specify it and is not explicitly unpublished
 					if (current && event.published === undefined && !isNewEventMarkedUnpublished) {
 						event.published = current.published;
 					}
-					await this.events.put(event);
+					await this.events.put(event); // Save with derived dTag if applicable
 				});
 				return;
 			}
@@ -101,45 +109,34 @@ export class NostrLocalDB extends Dexie {
 			await this.transaction('rw', this.events, async () => {
 				let performPut = false;
 				if (!existingEvent) {
-					performPut = true; // Add if no existing event found
+					performPut = true;
 				} else if (event.created_at > existingEvent.created_at) {
-					performPut = true; // Update if new event is strictly newer
+					performPut = true;
 				} else if (event.created_at === existingEvent.created_at && event.id < existingEvent.id) {
-                    // Nip-01 tie-breaking rule: if timestamps are equal, lower event ID wins
 					performPut = true;
 				}
 
 				if (performPut) {
-					// Preserve existing published status only if:
-					// 1. There is an existing event.
-					// 2. The incoming event *doesn't* have a 'published' status set (i.e., it's likely from network sync).
-					// 3. The incoming event is *not* explicitly marked as unpublished (which takes precedence).
 					if (existingEvent && event.published === undefined && !isNewEventMarkedUnpublished) {
 						event.published = existingEvent.published;
 					}
-					// If an existing event is being replaced, delete the old one first to avoid conflicts
 					if (existingEvent) {
 						await this.events.delete(existingEvent.id);
 					}
-					await this.events.put(event);
+					await this.events.put(event); // Save with derived dTag
 				} else {
-					// New event is older or same age with larger/equal ID, do nothing
 					console.log(`Skipping update for replaceable event ${event.id}, existing is newer or preferred.`);
 				}
 			});
 
 		} else {
-			// Handle Non-Replaceable Event (e.g., Kind 1 Note)
-			// Non-replaceable events are added based on their unique ID.
-			// Use put which acts as add or update based on primary key 'id'.
+			// Handle Non-Replaceable Event
 			await this.transaction('rw', this.events, async () => {
 				const current = await this.events.get(event.id);
-				// Preserve published status if the incoming event doesn't specify it
-				// and the new event is *not* explicitly marked as unpublished
 				if (current && event.published === undefined && !isNewEventMarkedUnpublished) {
 					event.published = current.published;
 				}
-				await this.events.put(event);
+				await this.events.put(event); // Save with derived dTag (will be undefined here)
 			});
 		}
 	}
@@ -265,27 +262,54 @@ export class NostrLocalDB extends Dexie {
 	}
 
 	async getLatestEventByCoord(kind: number, pubkey: string, dTag?: string): Promise<StoredEvent | undefined> {
+		console.log(`%cgetLatestEventByCoord: Received args: kind=${kind}, pubkey=${pubkey}, dTag=${dTag}`, 'color: orange;'); // Log args
 		let query;
 		if (dTag && kind >= 30000 && kind < 40000) {
 			// Parametrized: Use [kind+pubkey+dTag] index
 			const key: [number, string, string] = [kind, pubkey, dTag];
+			console.log(`%cgetLatestEventByCoord: Using [kind+pubkey+dTag] query with key:`, 'color: orange;', key); // Log query type
 			query = this.events.where('[kind+pubkey+dTag]').equals(key);
 		} else if (isReplaceableKind(kind)) {
 			// Standard Replaceable: Use [kind+pubkey] index
 			const key: [number, string] = [kind, pubkey];
+			console.log(`%cgetLatestEventByCoord: Using [kind+pubkey] query with key:`, 'color: orange;', key); // Log query type
 			query = this.events.where('[kind+pubkey]').equals(key);
 		} else {
 			console.warn(`getLatestEventByCoord called for non-replaceable kind: ${kind}`);
 			return undefined;
 		}
-		// Use the .last() method. Dexie sorts compound keys, so .last() on a query
-		// using '[kind+pubkey]' or '[kind+pubkey+dTag]' should work even without created_at
-		// explicitly in the index name, as it finds the matching range and gets the last primary key within it.
-		// If performance becomes an issue, add created_at to the index definitions.
+		
 		try {
-			// Attempt to get the last item based on the index used in the query
-			const latest = await query.last(); // .last() is efficient with indexed lookups
+			// *** MODIFIED QUERY STRATEGY ***
+			console.log(`%cgetLatestEventByCoord: Executing query.toArray()...`, 'color: orange;'); 
+			const matchingEvents = await query.toArray();
+			console.log(`%cgetLatestEventByCoord: query.toArray() returned ${matchingEvents.length} events:`, 'color: orange;', matchingEvents);
+
+			if (matchingEvents.length === 0) {
+				return undefined;
+			} 
+
+			// Sort manually to find the latest (descending created_at, then ascending id for tie-breaking)
+			matchingEvents.sort((a, b) => {
+				if (b.created_at !== a.created_at) {
+					return b.created_at - a.created_at;
+				} else {
+					// Use NIP-01 tie-breaking (smaller ID wins - sort ascending)
+					return a.id.localeCompare(b.id); 
+				}
+			});
+
+			const latest = matchingEvents[0]; // The first element after sorting is the latest
+			console.log(`%cgetLatestEventByCoord: Manually determined latest event:`, 'color: orange;', latest);
 			return latest;
+			// *** END MODIFIED QUERY STRATEGY ***
+
+			/* Original logic using .last()
+			console.log(`%cgetLatestEventByCoord: Executing query.last()...`, 'color: orange;'); // Log before query
+			const latest = await query.last(); // .last() is efficient with indexed lookups
+			console.log(`%cgetLatestEventByCoord: query.last() returned:`, 'color: orange;', latest); // Log result
+			return latest;
+			*/
 		} catch (error) {
 			console.error("Error fetching latest event by coordinate:", { kind, pubkey, dTag }, error);
 			return undefined;

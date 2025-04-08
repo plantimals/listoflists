@@ -1,7 +1,8 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { get } from 'svelte/store';
-    import { ndk } from '$lib/ndkStore';
+    // import { get } from 'svelte/store'; // Removed
+    // import { ndk } from '$lib/ndkStore'; // Removed
+    import { ndkService } from '$lib/ndkService'; // Added
     import { localDb, type StoredEvent } from '$lib/localDb';
     import type { NDKUserProfile, NDKEvent } from '@nostr-dev-kit/ndk';
 
@@ -40,17 +41,18 @@
 
             // 2. Not Found Locally - Try Network
             console.log(`UserItem (${pubkey.substring(0, 6)}): Not found locally. Fetching from network...`);
-            const ndkInstance = get(ndk);
-            if (!ndkInstance) {
-                console.error(`UserItem (${pubkey.substring(0, 6)}): NDK instance not available for network fetch.`);
-                isLoading = false;
-                return;
-            }
+            // const ndkInstance = get(ndk); // Removed
+            // if (!ndkInstance) { // Service handles NDK availability
+            //    console.error(`UserItem (${pubkey.substring(0, 6)}): NDK instance not available for network fetch.`);
+            //    isLoading = false;
+            //    return;
+            // }
 
             try {
-                await ndkInstance.connect(); // Ensure connection
+                // await ndkInstance.connect(); // Removed - Service handles connection
                 const filter = { kinds: [0], authors: [pubkey], limit: 1 };
-                const fetchedEvent: NDKEvent | null = await ndkInstance.fetchEvent(filter);
+                // Fetch using the service
+                const fetchedEvent: NDKEvent | null = await ndkService.fetchEvent(filter);
 
                 if (fetchedEvent) {
                     console.log(`UserItem (${pubkey.substring(0, 6)}): Fetched profile event from network.`);

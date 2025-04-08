@@ -2,15 +2,18 @@
     // Keep the props definition
     // import type { TreeNodeData } from '$lib/hierarchyService'; // Import path might need adjustment based on project structure
     import type { TreeNodeData } from '$lib/types'; // Corrected import and type name
-    import UserItem from './UserItem.svelte'; // Import UserItem
-    import NoteItem from './NoteItem.svelte'; // Import NoteItem
+    import UserItem from '$lib/components/UserItem.svelte'; // Import UserItem
+    import NoteItem from '$lib/components/NoteItem.svelte'; // Import NoteItem
     import { get } from 'svelte/store';
     import { user } from '$lib/userStore';
-    import { ndk } from '$lib/ndkStore';
     import { refreshTrigger } from '$lib/refreshStore';
     import { addItemToList, removeItemFromList, type ListServiceDependencies } from '$lib/listService'; // Import list service functions
     // import AddItemModal from './AddItemModal.svelte'; // Import the modal - Removed
     import { createEventDispatcher } from 'svelte'; // Import dispatcher
+    import { localDb, type StoredEvent } from '$lib/localDb';
+    import { ndkService } from '$lib/ndkService'; // Added
+    import { NDKEvent } from '@nostr-dev-kit/ndk';
+    import { nip19 } from 'nostr-tools'; // Import nip19
 
     export let node: TreeNodeData; // Corrected type annotation
     export let level: number = 0;
@@ -18,6 +21,7 @@
     let expanded: boolean = false; // State for expand/collapse
     let isAdding: boolean = false;
     let isRemovingItemId: string | null = null; // Store which item is being removed
+    let errorMessage: string | null = null; // Declare errorMessage
 
     // State for Add Item Modal context - Removed
     // let addItemTargetListId: string | null = null;
@@ -37,41 +41,81 @@
     // Define the item type explicitly, matching the structure used in listService/hierarchyService
     type ListItem = { type: 'p' | 'e'; value: string };
 
-    async function handleRemoveItem(item: ListItem) {
-        if (!node.id) {
-            console.error("Cannot remove item: List node ID is missing.");
-            alert("Cannot remove item: List node ID is missing.");
-            return;
-        }
+    async function handleRemoveItem(itemId: string, itemType: 'p' | 'e') {
+        isRemovingItemId = itemId;
+        errorMessage = null;
 
-        isRemovingItemId = item.value;
+        // Get Signer and NDK Instance from Service
+        const signer = ndkService.getSigner();
+        const ndkInstanceForEvent = ndkService.getNdkInstance();
 
-        const currentUser = get(user);
-        const ndkInstance = get(ndk);
-
-        if (!currentUser || !ndkInstance) {
-            console.error("Cannot remove item: User or NDK not available.");
-            alert("Action failed: User or NDK not available.");
+        if (!signer || !ndkInstanceForEvent) {
+            errorMessage = 'Signer or NDK instance not available.';
+            console.error(errorMessage);
             isRemovingItemId = null;
             return;
         }
-
-        const deps: ListServiceDependencies = { currentUser, ndkInstance };
+        
+        // Removed currentUser check as it's implicit via signer
+        // Removed get(ndk) and related check
 
         try {
-            console.log(`Attempting to remove item ${item.type}:${item.value} from list ${node.id}`);
-            const result = await removeItemFromList(node.id, item, deps);
-
-            if (result.success) {
-                console.log(`Item ${item.type}:${item.value} removed successfully locally from list ${node.id}.`);
-                dispatch('listchanged'); // Notify parent page to refresh
-            } else {
-                console.error(`Failed to remove item from list ${node.id}:`, result.error);
-                alert(`Failed to remove item: ${result.error}`);
+            const originalListEventData = await localDb.getEventById(node.id); // Use list ID from node
+            if (!originalListEventData) {
+                throw new Error(`Original list event ${node.id} not found locally.`);
             }
-        } catch (error) {
-            console.error(`Unexpected error removing item from list ${node.id}:`, error);
-            alert(`An unexpected error occurred while removing the item.`);
+
+            // Create a new NDKEvent instance using the NDK instance from the service
+            const newListEvent = new NDKEvent(ndkInstanceForEvent); // Pass the NDK instance
+            newListEvent.kind = originalListEventData.kind;
+            newListEvent.content = originalListEventData.content;
+
+            // Filter out the tag to be removed
+            newListEvent.tags = originalListEventData.tags.filter(tag => !(tag[0] === itemType && tag[1] === itemId));
+
+            // Re-add replaceable list identifier tags if needed (e.g., 'd')
+            const dTag = originalListEventData.tags.find(tag => tag[0] === 'd');
+            if (dTag && !newListEvent.tags.some(tag => tag[0] === 'd')) {
+                newListEvent.tags.push(dTag);
+            }
+            const titleTag = originalListEventData.tags.find(tag => tag[0] === 'title');
+             if (titleTag && !newListEvent.tags.some(tag => tag[0] === 'title')) {
+                newListEvent.tags.push(titleTag);
+            }
+
+            // Sign using the signer from the service
+            await newListEvent.sign(signer);
+            console.log('Signed event after item removal:', newListEvent);
+
+            // Publish using the service
+            const publishedTo = await ndkService.publish(newListEvent);
+            if (publishedTo.size === 0) {
+                throw new Error('Updated list event was not published to any relays.');
+            }
+
+            // Save updated event to local DB
+            const storedEventData: StoredEvent = {
+                // ... map fields from newListEvent ...
+                 id: newListEvent.id,
+                 kind: newListEvent.kind,
+                 pubkey: newListEvent.pubkey,
+                 created_at: newListEvent.created_at ?? 0,
+                 tags: newListEvent.tags,
+                 content: newListEvent.content,
+                 sig: newListEvent.sig ?? '',
+                 dTag: dTag?.[1], // Add dTag if present
+                 published: false // Mark as unpublished until sync confirms
+            };
+            await localDb.addOrUpdateEvent(storedEventData);
+            console.log('Updated list event saved locally.');
+
+            dispatch('itemremoved', { listId: node.id }); // Notify parent
+            // Update the store value to trigger listeners
+            refreshTrigger.update(n => n + 1);
+
+        } catch (err: any) {
+            console.error('Error removing item:', err);
+            errorMessage = `Failed to remove item: ${err.message}`;
         } finally {
             isRemovingItemId = null;
         }
@@ -85,6 +129,9 @@
              // alert("Cannot open add item modal: List details missing.");
              return;
         }
+        // *** Debug Log: Check node.id before dispatch ***
+        console.log(`%cTreeNode: Dispatching openadditem with listId: '${node.id}', listName: '${node.name}'`, 'color: blue;', node);
+
         // Dispatch the event with necessary details
         dispatch('openadditem', {
             listId: node.id,
@@ -97,6 +144,53 @@
     //     console.log('TreeNode: Item added event received from modal. Triggering listchanged.');
     //     dispatch('listchanged'); // Dispatch event up to parent
     // }
+
+    async function removeListFromParent(childListId: string, parentListId: string) {
+        console.log(`Removing child list ${childListId} from parent ${parentListId}`);
+
+        // const ndkInstance = get(ndk); // Removed
+        // if (!ndkInstance) {
+        //     console.error('NDK instance not available.');
+        //     return;
+        // }
+        // Get signer from service
+        const signer = ndkService.getSigner();
+        const ndkInstanceForEvent = ndkService.getNdkInstance();
+        if (!signer || !ndkInstanceForEvent) {
+             console.error('Signer or NDK instance not available. Cannot remove list.');
+            return;
+        }
+
+        try {
+            // 1. Fetch the latest version of the parent list event using ID
+            const parentEventData = await localDb.getEventById(parentListId); // Use getEventById
+            if (!parentEventData) {
+                throw new Error(`Parent list event ${parentListId} not found in local DB.`);
+            }
+
+            // 2. Create a new event based on the parent, removing the child tag
+            const updatedEvent = new NDKEvent(ndkInstanceForEvent);
+            updatedEvent.kind = parentEventData.kind;
+            updatedEvent.content = parentEventData.content;
+
+            // 3. Sign the updated event
+            await updatedEvent.sign(signer);
+            console.log('Signed updated parent list event:', updatedEvent);
+
+            // 4. Publish the updated event
+            const publishedTo = await ndkService.publish(updatedEvent);
+
+            if (publishedTo.size === 0) {
+                throw new Error('Updated parent list event was not published to any relays.');
+            }
+
+            dispatch('listremoved', { parentId: parentListId, childId: childListId });
+            refreshTrigger.update(n => n + 1);
+        } catch (error: any) {
+            console.error('Error removing list from parent:', error);
+            alert('An error occurred while removing the list from its parent.');
+        }
+    }
 
     // No other script logic needed for this step
 </script>
@@ -171,7 +265,7 @@
                     <button
                         class="btn btn-xs btn-circle btn-ghost text-error opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
                         title="Remove item"
-                        on:click|stopPropagation={() => handleRemoveItem(item)}
+                        on:click|stopPropagation={() => handleRemoveItem(item.value, item.type)}
                         disabled={isRemovingItemId !== null}
                     >
                         {#if isRemovingItemId === item.value}
