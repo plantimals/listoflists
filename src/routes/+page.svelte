@@ -244,35 +244,28 @@
           }
           // >>>>> End Update Loading States <<<<<
 
+          // 3. Trigger Initial Background Sync using handleSync
+          console.log("Initial local load complete. Triggering initial background sync...");
+          isInitialSyncing = true; // Set the specific flag for this background task
 
-          // 3. Fetch List Updates from Network (Background)
-          console.log("Initiating background fetch for list updates from network for:", pubkey);
-          // Set background sync flag
-          isInitialSyncing = true;
-
-          // Use an async IIFE to track completion and reset the flag
-          (async () => {
-              try {
-                  await fetchAndStoreUserLists(pubkey);
-                  console.log("Background list fetch/store completed successfully.");
-                  // Potentially trigger a refresh here if needed, or rely on manual sync/refreshTrigger
-                  // For now, just update the flag.
-              } catch (fetchError) {
-                  console.error("Error during background list fetch/store:", fetchError);
-              } finally {
-                   // Only reset flag if still the same user
-                  const currentLoggedInPubkeyAfterFetch = get(user)?.pubkey;
-                  if (currentLoggedInPubkeyAfterFetch === pubkey) {
-                        isInitialSyncing = false;
-                        console.log("Background sync flag reset.");
+          // Call handleSync without await and pass the initial sync flag
+          handleSync({ isInitialSync: true })
+              .catch(error => {
+                  // Catch errors specifically from the background sync
+                  console.error("Initial background sync encountered an error:", error);
+                  // Optionally: Display a non-blocking error message to the user
+              })
+              .finally(() => {
+                   // Ensure the initial syncing flag is reset when done
+                  // Only reset flag if still the same user
+                  const currentLoggedInPubkeyAfterSync = get(user)?.pubkey;
+                  if (currentLoggedInPubkeyAfterSync === pubkey) {
+                       isInitialSyncing = false;
+                       console.log("Initial background sync process finished.");
                   } else {
-                       console.log("User changed during background fetch, background sync flag not reset.");
+                       console.log("User changed during background sync, initial sync flag not reset.");
                   }
-
-              }
-          })();
-          console.log("Background list fetch/store process initiated.");
-
+              });
 
       } catch (error) {
             console.error("Error during loadDataAndBuildHierarchy:", error);
