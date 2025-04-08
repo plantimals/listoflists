@@ -26,20 +26,23 @@
             return;
         }
 
-        console.log(`NoteItem (${shortEventId}): Checking local DB...`);
+        console.debug(`NoteItem (${shortEventId}): Mounting with eventId:`, eventId);
+
         try {
             // 1. Try Local First
+            console.debug(`NoteItem (${shortEventId}): Checking local DB...`);
             const localEventData = await localDb.getEventById(eventId);
+            console.debug(`NoteItem (${shortEventId}): Local DB result:`, localEventData);
 
             if (localEventData) {
-                console.log(`NoteItem (${shortEventId}): Found event in local DB.`);
+                console.debug(`NoteItem (${shortEventId}): Found event in local DB.`);
                 noteData = localEventData;
                 isLoading = false;
                 return; // Found locally
             }
 
             // 2. Not Found Locally - Try Network
-            console.log(`NoteItem (${shortEventId}): Not found locally. Fetching from network...`);
+            console.debug(`NoteItem (${shortEventId}): Not found locally. Fetching from network...`);
             const ndkInstance = get(ndk);
             if (!ndkInstance) {
                 console.error(`NoteItem (${shortEventId}): NDK instance not available for network fetch.`);
@@ -49,11 +52,13 @@
 
             try {
                 await ndkInstance.connect();
+                console.debug(`NoteItem (${shortEventId}): Calling ndk.fetchEvent for ID: ${eventId}`);
                 // NDK's fetchEvent can take an ID directly or a filter { ids: [eventId] }
                 const fetchedEvent: NDKEvent | null = await ndkInstance.fetchEvent(eventId);
+                console.debug(`NoteItem (${shortEventId}): Network fetch result:`, fetchedEvent);
 
                 if (fetchedEvent) {
-                    console.log(`NoteItem (${shortEventId}): Fetched event from network.`);
+                    console.debug(`NoteItem (${shortEventId}): Fetched event from network.`);
                     // 3. Convert NDKEvent to StoredEvent and Save to DB
                     const storedEventData: StoredEvent = {
                         id: fetchedEvent.id,
@@ -63,26 +68,31 @@
                         tags: fetchedEvent.tags,
                         content: fetchedEvent.content,
                         sig: fetchedEvent.sig ?? '',
+                        // Add dTag for future use if needed, though less common for kind 1
+                        dTag: (fetchedEvent.kind >= 30000 && fetchedEvent.kind < 40000) ? fetchedEvent.tags.find(t => t[0] === 'd')?.[1] : undefined,
+                        // Mark as published since we fetched it
+                        published: true,
                     };
+                    console.debug(`NoteItem (${shortEventId}): Saving fetched event to DB...`, storedEventData);
                     await localDb.addOrUpdateEvent(storedEventData);
-                    console.log(`NoteItem (${shortEventId}): Saved fetched event to local DB.`);
+                    console.debug(`NoteItem (${shortEventId}): Saved fetched event.`);
 
                     // 4. Update component state with the (now stored) data
                     noteData = storedEventData;
 
                 } else {
-                    console.log(`NoteItem (${shortEventId}): No event found on network.`);
+                    console.debug(`NoteItem (${shortEventId}): No event found on network.`);
                     noteData = null; // Ensure null if not found
                 }
             } catch (networkError) {
-                console.error(`NoteItem (${shortEventId}): Failed during network fetch or DB save:`, networkError);
+                console.error(`NoteItem (${shortEventId}): Network fetch/save Error:`, networkError);
                 noteData = null; // Ensure null on error
             } finally {
                  isLoading = false; // Stop loading indicator after network attempt
             }
 
-        } catch (error) {
-            console.error(`NoteItem (${shortEventId}): Error during initial local DB check:`, error);
+        } catch (dbError) {
+            console.error(`NoteItem (${shortEventId}): Initial DB check Error:`, dbError);
             isLoading = false; // Ensure loading stops on initial DB error too
         }
     });

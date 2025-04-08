@@ -4,163 +4,141 @@
     import { user } from '$lib/userStore';
     import { ndk } from '$lib/ndkStore';
     import { addItemToList, type ListServiceDependencies } from '$lib/listService';
-    import { refreshTrigger } from '$lib/refreshStore'; // Import refresh trigger
 
-    export let targetListId: string; // The event ID of the list to add to
+    /**
+     * The target list ID (a-tag coordinate or event ID) to add the item to.
+     * Passed in when the modal is opened.
+     */
+    export let targetListId: string | null = null;
+    /**
+     * The display name of the target list.
+     * Passed in when the modal is opened.
+     */
+    export let targetListName: string = '';
 
-    const dispatch = createEventDispatcher();
+    $: {
+        console.log(`AddItemModal: Received/Updated props - targetListId = ${targetListId}, targetListName = ${targetListName}`);
+    }
 
-    let itemType: 'p' | 'e' = 'p'; // Default to 'p' (profile)
-    let itemValue: string = '';
+    let itemInput: string = '';
     let isSaving: boolean = false;
     let errorMessage: string | null = null;
 
-    const modalId = `add_item_modal_${targetListId || Math.random().toString(36).substring(7)}`; // Unique enough ID
-
-    function closeModal() {
-        const modal = document.getElementById(modalId) as HTMLDialogElement | null;
-        modal?.close();
-        // Reset state when closing
-        itemType = 'p';
-        itemValue = '';
-        errorMessage = null;
-        isSaving = false; // Ensure saving state is reset
-    }
+    const dispatch = createEventDispatcher();
 
     async function saveAddItem() {
-        if (!itemValue.trim()) {
-            errorMessage = 'Item value cannot be empty.';
-            return;
-        }
-        if (!targetListId) {
-             errorMessage = 'Target list ID is missing.';
-             return;
-        }
+        console.log(`AddItemModal -> saveAddItem START: Current prop values - targetListId = ${targetListId}, targetListName = ${targetListName}, itemInput = ${itemInput}`);
 
-        // Basic validation (improve as needed)
-        if (itemType === 'p' && (itemValue.length !== 64 || !/^[0-9a-f]+$/.test(itemValue))) {
-            errorMessage = 'Invalid pubkey format (must be 64 hex characters).';
-            return;
-        }
-         if (itemType === 'e' && (itemValue.length !== 64 || !/^[0-9a-f]+$/.test(itemValue))) {
-            // Could add bech32 validation later if needed for event IDs
-            errorMessage = 'Invalid event ID format (must be 64 hex characters).';
+        if (!targetListId || !itemInput.trim()) {
+            console.error(`AddItemModal -> saveAddItem ERROR: Check failed. targetListId=${targetListId}, itemInput=${itemInput}`);
+            errorMessage = 'Missing list context or item value.';
             return;
         }
 
-
-        errorMessage = null;
         isSaving = true;
+        errorMessage = null;
 
         const currentUser = get(user);
         const ndkInstance = get(ndk);
 
         if (!currentUser || !ndkInstance) {
-            errorMessage = 'User or NDK instance not available. Please log in.';
+            errorMessage = 'User or NDK not available. Cannot save item.';
             isSaving = false;
             return;
         }
 
         const deps: ListServiceDependencies = { currentUser, ndkInstance };
-        const itemToAdd = { type: itemType, value: itemValue.trim() };
+        const trimmedInput = itemInput.trim();
 
         try {
-            const result = await addItemToList(targetListId, itemToAdd, deps);
+            console.log(`AddItemModal: Calling addItemToList for list '${targetListId}' with input: '${trimmedInput}'`);
+            const result = await addItemToList(targetListId, trimmedInput, deps);
 
             if (result.success) {
-                console.log(`Item ${itemToAdd.type}:${itemToAdd.value} added locally to list ${targetListId}. Triggering refresh.`);
-                refreshTrigger.update(n => n + 1); // Trigger global refresh
-                closeModal(); // Close modal on success
+                console.log(`AddItemModal: Item added successfully to list '${targetListId}'.`);
+                dispatch('itemadded');
+                // Close the modal programmatically
+                const modalElement = document.getElementById('add_item_modal') as HTMLDialogElement | null;
+                modalElement?.close(); // This automatically triggers the handleClose via the 'close' event
+                // Resetting state is handled in handleClose
             } else {
-                errorMessage = `Failed to add item: ${result.error || 'Unknown error'}`;
+                console.error(`AddItemModal: Failed to add item to list '${targetListId}':`, result.error);
+                errorMessage = result.error || 'Failed to add item. Unknown error.';
             }
-        } catch (error: any) {
-            console.error(`Error calling addItemToList for list ${targetListId}:`, error);
-            errorMessage = `An unexpected error occurred: ${error.message || error}`;
+        } catch (error) {
+            console.error(`AddItemModal: Unexpected error adding item to list '${targetListId}':`, error);
+            errorMessage = 'An unexpected error occurred while saving.';
         } finally {
             isSaving = false;
         }
     }
 
-     // Public method to open the modal
-    export function open() {
-        const modal = document.getElementById(modalId) as HTMLDialogElement | null;
-        modal?.showModal();
+    function handleClose() {
+        // Reset state when the modal is closed (either programmatically or via backdrop/close button)
+        console.log('AddItemModal: Closing and resetting state.');
+        itemInput = '';
+        errorMessage = null;
+        isSaving = false;
+        // Resetting targetListId/Name is not strictly necessary here as they are props
+        // but might be good practice if the parent doesn't always reset them before opening.
+        // targetListId = null;
+        // targetListName = '';
     }
-
 </script>
 
-<dialog id="{modalId}" class="modal modal-bottom sm:modal-middle">
+<dialog id="add_item_modal" class="modal" on:close={handleClose}>
     <div class="modal-box">
-        <h3 class="font-bold text-lg">Add Item to List</h3>
+        <h3 class="font-bold text-lg mb-4">Add Item to '{targetListName || 'List'}'</h3>
 
-        <form method="dialog" on:submit|preventDefault={saveAddItem}>
-             <!-- Close button (form method="dialog" handles closing) -->
-             <button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" type="button" on:click={closeModal}>✕</button>
-
-            <div class="py-4 space-y-4">
-                <!-- Item Type Selection -->
-                <div>
-                    <label class="label">
-                        <span class="label-text">Item Type</span>
-                    </label>
-                    <div class="flex space-x-4">
-                        <label class="label cursor-pointer">
-                            <input type="radio" name="itemType" class="radio checked:bg-primary" value="p" bind:group={itemType} />
-                            <span class="label-text ml-2">Profile (pubkey)</span>
-                        </label>
-                        <label class="label cursor-pointer">
-                            <input type="radio" name="itemType" class="radio checked:bg-secondary" value="e" bind:group={itemType} />
-                            <span class="label-text ml-2">Event (ID)</span>
-                        </label>
-                    </div>
-                </div>
-
-                <!-- Item Value Input -->
-                <div>
-                    <label class="label" for="{modalId}_value">
-                        <span class="label-text">{itemType === 'p' ? 'Public Key (hex)' : 'Event ID (hex)'}</span>
-                    </label>
-                    <input
-                        type="text"
-                        id="{modalId}_value"
-                        bind:value={itemValue}
-                        placeholder={itemType === 'p' ? 'Enter 64-char pubkey...' : 'Enter 64-char event ID...'}
-                        class="input input-bordered w-full"
-                        required
-                        minlength="64"
-                        maxlength="64"
-                        pattern="^[0-9a-f]{64}$"
-                        disabled={isSaving}
+        {#if errorMessage}
+            <div class="alert alert-error mb-4">
+                <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    class="stroke-current shrink-0 h-6 w-6"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                >
+                    <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"
                     />
-                </div>
+                </svg>
+                <span>Error: {errorMessage}</span>
+            </div>
+        {/if}
 
-                <!-- Error Message -->
-                {#if errorMessage}
-                    <div role="alert" class="alert alert-error text-sm p-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2 2m2-2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                        <span>{errorMessage}</span>
-                    </div>
+        <textarea
+            class="textarea textarea-bordered w-full"
+            rows="3"
+            placeholder="Enter npub, naddr, note1, nevent, hex ID, or coordinate (kind:pubkey:dTag)..."
+            bind:value={itemInput}
+            disabled={isSaving}
+        ></textarea>
+
+        <div class="modal-action">
+            <form method="dialog">
+                <!-- Standard close button -->
+                <button class="btn" disabled={isSaving}>Close</button>
+            </form>
+            <button
+                class="btn btn-primary"
+                on:click={saveAddItem}
+                disabled={isSaving || !itemInput.trim()}
+            >
+                {#if isSaving}
+                    <span class="loading loading-spinner loading-xs"></span>
+                    Saving...
+                {:else}
+                    Save Item
                 {/if}
-            </div>
-
-            <div class="modal-action">
-                 <!-- Add type="submit" to the save button -->
-                <button class="btn btn-primary" type="submit" disabled={isSaving}>
-                    {#if isSaving}
-                        <span class="loading loading-spinner"></span>
-                        Saving...
-                    {:else}
-                        Save Item
-                    {/if}
-                </button>
-                 <!-- Close button that resets state -->
-                 <button class="btn" type="button" on:click={closeModal} disabled={isSaving}>Close</button>
-            </div>
-        </form>
+            </button>
+        </div>
     </div>
-     <!-- Click outside to close -->
+    <!-- Modal Backdrop -->
     <form method="dialog" class="modal-backdrop">
-        <button on:click={closeModal}>close</button>
+        <!-- Clicking backdrop closes modal -->
+        <button disabled={isSaving}>close</button>
     </form>
 </dialog> 

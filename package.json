@@ -12,7 +12,8 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"test:ui": "vitest --ui"
+		"test:ui": "vitest --ui",
+		"repomix": "repomix . --ignore ai/,node_modules/ -o ai/repomix-output.txt"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^4.0.0",
@@ -40,6 +41,7 @@
 	},
 	"dependencies": {
 		"@nostr-dev-kit/ndk": "2.13.1-rc4",
-		"dexie": "^4.0.11"
+		"dexie": "^4.0.11",
+		"nostr-tools": "^2.12.0"
 	}
 }

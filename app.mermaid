@@ -1,0 +1,69 @@
+graph TD
+    subgraph User Interface Svelte Components
+        Page["+page.svelte (Main View)"]
+        Modals["CreateListModal / AddItemModal"]
+        TreeView["TreeNode / UserItem / NoteItem"]
+        Buttons["Login / Sync / Create Buttons"]
+    end
+
+    subgraph App State / Page Logic
+        Stores["Svelte Stores\n(user, profile, listHierarchy, isHierarchyLoading, ndk)"]
+        PageLogic["+page.svelte Logic\n(handleLogin, handleSync, loadDataAndBuildHierarchy)"]
+    end
+
+    subgraph Core Services src/lib
+        ListService["listService.ts\n(addItemToList, removeItemFromList)"]
+        HierarchyService["hierarchyService.ts\n(buildHierarchy, transform...)"]
+        LocalDBService["localDb.ts\n(Dexie Wrapper)"]
+    end
+
+    subgraph Nostr Layer
+         NdkStore["ndkStore (Provides NDK Instance)"]
+         NDK["NDK Instance"]
+         NIP07["Browser NIP-07 Signer API"]
+    end
+
+    subgraph External Systems
+        BrowserDB["Browser IndexedDB"]
+        NostrRelays["Nostr Relays"]
+    end
+
+    %% --- Key Interactions --- %%
+
+    %% UI Layer Interactions %%
+    Page -- Reads/Updates --> Stores
+    Page -- Calls --> PageLogic
+    Page -- Renders --> TreeView
+    Page -- Renders/Triggers --> Modals
+    Page -- Contains --> Buttons
+    TreeView -- Reads Data From --> Stores["(via node prop from $listHierarchy)"]
+    TreeView -- Calls Item Fetching Logic --> UserItem/NoteItem
+    TreeView -- Triggers Modifications --> ListService["(via event handlers like handleRemoveItem)"]
+    TreeView -- Dispatches Events (e.g., listchanged) --> PageLogic["(via on:listchanged)"]
+    UserItem/NoteItem -- Read/Write --> LocalDBService
+    UserItem/NoteItem -- Fetch via --> NDK
+    Modals -- Call --> ListService
+    Modals -- Dispatch Events (e.g., listcreated) --> PageLogic["(via on:listcreated)"]
+    Buttons -- Call --> PageLogic["(handleLogin, handleSync)"]
+    Buttons -- Call JS --> Modals["(modal.showModal())"]
+
+
+    %% Page Logic Interactions %%
+    PageLogic -- Reads/Updates --> Stores
+    PageLogic -- Calls --> HierarchyService
+    PageLogic -- Calls --> LocalDBService["(Initial loads, Sync reads)"]
+    PageLogic -- Calls --> NDK["(Sync fetch/publish)"]
+
+    %% Service Layer Interactions %%
+    ListService -- Reads/Writes --> LocalDBService
+    ListService -- Uses --> NDK["(for NDKEvent, sign)"]
+    ListService -- Reads --> Stores["(user, ndk via get)"]
+
+    HierarchyService -- Reads --> LocalDBService
+
+    LocalDBService -- Reads/Writes --> BrowserDB
+
+    %% Nostr Layer Interactions %%
+    NdkStore -- Provides --> NDK
+    NDK -- Uses --> NIP07
+    NDK -- Reads/Writes --> NostrRelays

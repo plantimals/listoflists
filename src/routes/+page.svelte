@@ -7,17 +7,37 @@
   import { get } from 'svelte/store';
   import { refreshTrigger } from '$lib/refreshStore'; // <-- Import refresh trigger
   // import { Button } from '@skeletonlabs/skeleton'; // Removed Skeleton import
-  import { NDKEvent, type NDKUser, type NDKUserProfile, type NDKFilter } from '@nostr-dev-kit/ndk';
+  // Separate NDK imports: Default and Named
+  import NDK from '@nostr-dev-kit/ndk';
+  import { NDKEvent, type NDKUser, type NDKUserProfile, type NDKFilter, NDKNip07Signer, type NDKSigner, type NDKList } from '@nostr-dev-kit/ndk';
   import TreeNode from '$lib/components/TreeNode.svelte'; // Import the new component
   import type { TreeNodeData } from '$lib/types'; // Import the type
   import { localDb, type StoredEvent } from '$lib/localDb'; // Import localDb AND StoredEvent type
   import CreateListModal from '$lib/components/CreateListModal.svelte'; // Import the modal component
   import { browser } from '$app/environment'; // Import browser
+  import { onMount } from 'svelte';
+  import { writable } from 'svelte/store';
+  import { nip19 } from 'nostr-tools';
+  import AddItemModal from '$lib/components/AddItemModal.svelte'; // Import the Add Item modal
 
   let isLoadingProfile: boolean = false;
   let isLoadingInitialLists: boolean = false; // New state for the initial network fetch
   let isSyncing: boolean = false; // Add state for sync process
   let lastLoadedPubkey: string | null = null; // Guard against multiple triggers
+
+  // Modal State
+  let showCreateListModal = false;
+
+  // Add Item Modal State
+  let modalTargetListId: string | null = null;
+  let modalTargetListName: string = '';
+  let addItemModalInstance: AddItemModal; // Instance binding for AddItemModal
+
+  let isLoading = writable(true); // Store for loading state
+  let error: string | null = null; // Store for error messages
+  let activeNdk: NDK | null = null;
+
+  let createListModalInstance: CreateListModal; // Instance binding
 
   // Mock data for testing TreeNode with nesting
   // const mockNestedNodeData: TreeNodeData = { ... };
@@ -478,12 +498,61 @@
     }
   */
 
+  // Function to handle the listchanged event from TreeNode
+  function handleListChanged() {
+    console.log('List changed event received in +page.svelte, triggering refresh...');
+    const currentPubkey = get(user)?.pubkey;
+    if (currentPubkey) {
+      // Add a small delay to allow DB operations to potentially settle
+      // Although Dexie transactions should handle consistency, a brief UI delay can feel smoother.
+      setTimeout(() => {
+         loadDataAndBuildHierarchy(currentPubkey);
+      }, 100); // 100ms delay, adjust if needed
+    } else {
+       console.warn('Cannot refresh list: User pubkey not found.');
+    }
+  }
+
+  // Function to handle the 'openadditem' event from TreeNode
+  function handleOpenAddItem(event: CustomEvent<{ listId: string; listName: string }>) {
+      // Note: We don't strictly need the instance binding (`bind:this`) to *open* the modal
+      // if we use getElementById, but it could be useful for other interactions if needed later.
+      modalTargetListId = event.detail.listId;
+      modalTargetListName = event.detail.listName;
+      console.log(`+page.svelte -> handleOpenAddItem: Setting modal context - ID=${modalTargetListId}, Name=${modalTargetListName}`);
+
+      // Find the dialog element and show it
+      const dialogElement = document.getElementById('add_item_modal') as HTMLDialogElement | null;
+      if (dialogElement) {
+           dialogElement.showModal();
+      } else {
+           console.error("Could not find dialog element with id 'add_item_modal'");
+           alert("Error: Could not open the Add Item form."); // User feedback
+      }
+  }
+
+  onMount(() => {
+    // Initial load
+    const currentPubkey = get(user)?.pubkey;
+    if (currentPubkey) {
+      loadDataAndBuildHierarchy(currentPubkey);
+    }
+    // Potentially trigger initial sync here too
+  });
+
 </script>
 
 <div class="container p-4 mx-auto">
   {#if $user}
     <!-- Render the modal (it's hidden by default) -->
-    <CreateListModal on:listcreated={handleListCreated} />
+    <CreateListModal bind:this={createListModalInstance} on:listcreated={handleListChanged} />
+
+    <!-- Add Item Modal Instance -->
+    <AddItemModal
+        bind:this={addItemModalInstance}
+        targetListId={modalTargetListId}
+        targetListName={modalTargetListName}
+        on:itemadded={handleListChanged} />
 
     <!-- Logged In State - Using DaisyUI -->
     <p class="mb-4 text-sm text-base-content/80">Logged In as: <code class="break-all font-mono bg-base-200 px-1 rounded">{$user.npub}</code></p>
@@ -547,12 +616,11 @@
         {:else if $listHierarchy.length > 0}
              {@const logState = console.log('TEMPLATE CHECK (hierarchy): isLoading?', $isHierarchyLoading || isLoadingInitialLists, 'Hierarchy Length:', $listHierarchy.length)}
              {@const logHierarchy = console.log('TEMPLATE RENDERING: Hierarchy block')}
-            <ul class="space-y-1">
+            <div class="mt-4 space-y-2 overflow-auto" style="max-height: 70vh;">
                 {#each $listHierarchy as rootNode (rootNode.id)}
-                     {@const logNode = console.log('TEMPLATE RENDERING: TreeNode for', rootNode.id, rootNode.name)}
-                    <TreeNode node={rootNode} level={0} />
+                    <TreeNode node={rootNode} on:listchanged={handleListChanged} on:openadditem={handleOpenAddItem} />
                 {/each}
-            </ul>
+            </div>
         {:else} <!-- Only show 'no lists' if *not* loading -->
             {@const logState = console.log('TEMPLATE CHECK (empty): isLoading?', $isHierarchyLoading || isLoadingInitialLists, 'Hierarchy Length:', $listHierarchy.length)}
             {@const logEmpty = console.log('TEMPLATE RENDERING: No lists state')}
