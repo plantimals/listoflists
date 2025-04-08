@@ -7,13 +7,14 @@
     import { get } from 'svelte/store';
     import { user } from '$lib/userStore';
     import { refreshTrigger } from '$lib/refreshStore';
-    import { addItemToList, removeItemFromList, type ListServiceDependencies } from '$lib/listService'; // Import list service functions
+    import { addItemToList, removeItemFromList } from '$lib/listService'; // Removed ListServiceDependencies import
     // import AddItemModal from './AddItemModal.svelte'; // Import the modal - Removed
     import { createEventDispatcher } from 'svelte'; // Import dispatcher
     import { localDb, type StoredEvent } from '$lib/localDb';
     import { ndkService } from '$lib/ndkService'; // Added
     import { NDKEvent } from '@nostr-dev-kit/ndk';
     import { nip19 } from 'nostr-tools'; // Import nip19
+    import { isOnline } from '$lib/networkStatusStore'; // <-- Ensure isOnline is imported
 
     export let node: TreeNodeData; // Corrected type annotation
     export let level: number = 0;
@@ -248,46 +249,30 @@
 
 <!-- Render Items when Expanded -->
 {#if expanded && node.items && node.items.length > 0}
-    <div class="ml-6 mt-1 border-l border-base-300 pl-3 space-y-1 py-1" style="margin-left: {(level + 1) * 1.5}rem;">
-        {#each node.items as item (item.value)}
-            <!-- Wrapper div for item + button -->
-            <div class="flex items-center justify-between space-x-2 group hover:bg-base-200/50 rounded pr-1 py-0.5">
-                 <!-- Item Component -->
-                 <div class="flex-grow min-w-0"> <!-- Added min-w-0 for better truncation -->
-                    {#if item.type === 'p'}
-                        <UserItem pubkey={item.value} />
-                    {:else if item.type === 'e'}
-                        <NoteItem eventId={item.value} />
+    <div class="pl-6" style="padding-left: {level * 1.5 + 1.5}rem;">
+        {#each node.items as item (item.value)} <!-- Use item.value as key -->
+            <div class="flex items-center py-1 hover:bg-base-300 rounded text-sm">
+                {#if item.type === 'p'}
+                    <UserItem pubkey={item.value} />
+                {:else if item.type === 'e'}
+                    <NoteItem eventId={item.value} /> <!-- Corrected prop name: noteId -> eventId -->
+                {/if}
+
+                <!-- Remove Item Button -->
+                <button
+                    class="btn btn-xs btn-ghost text-error ml-auto mr-1"
+                    on:click={() => handleRemoveItem(item.value, item.type)}
+                    disabled={isRemovingItemId !== null || !$isOnline}
+                    title={!$isOnline ? 'Cannot remove item while offline' : (isRemovingItemId !== null ? 'Removing...' : 'Remove item')}
+                >
+                    {#if isRemovingItemId === item.value}
+                        <span class="loading loading-spinner loading-xs"></span>
+                    {:else}
+                        ✕
                     {/if}
-                 </div>
-                 <!-- Remove Button (re-integrated) -->
-                 {#if $user}
-                    <button
-                        class="btn btn-xs btn-circle btn-ghost text-error opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-                        title="Remove item"
-                        on:click|stopPropagation={() => handleRemoveItem(item.value, item.type)}
-                        disabled={isRemovingItemId !== null}
-                    >
-                        {#if isRemovingItemId === item.value}
-                            <span class="loading loading-spinner loading-xs"></span>
-                        {:else}
-                            ✕
-                        {/if}
-                    </button>
-                 {/if}
+                </button>
             </div>
         {/each}
-
-        <!-- Add Item Button (Connects to openAddItemModal) -->
-        <div class="mt-2 pl-4">
-            <button
-                class="btn btn-xs btn-outline btn-primary"
-                on:click|stopPropagation={openAddItemModal}
-                disabled={isRemovingItemId !== null || !$user}
-            >
-                <span>+ Add Item</span>
-            </button>
-        </div>
     </div>
 {/if}
 

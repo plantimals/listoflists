@@ -6,6 +6,7 @@
   import { buildHierarchy } from '$lib/hierarchyService';
   import { get } from 'svelte/store';
   import { refreshTrigger } from '$lib/refreshStore'; // <-- Import refresh trigger
+  import { isOnline } from '$lib/networkStatusStore'; // <-- Ensure isOnline store is imported
   // import { Button } from '@skeletonlabs/skeleton'; // Removed Skeleton import
   // Separate NDK imports: Default and Named
   import { NDKEvent, type NDKUser, type NDKUserProfile, type NDKFilter, NDKNip07Signer, type NDKSigner, type NDKList, NDKKind } from '@nostr-dev-kit/ndk';
@@ -468,7 +469,20 @@
 
 </script>
 
-<div class="container p-4 mx-auto">
+<div class="container mx-auto p-4 pt-10 md:pt-12 lg:pt-16">
+
+    <!-- Network Status Indicator -->
+    {#if !$isOnline}
+      <div class="alert alert-sm alert-warning justify-start mt-2 mb-4 shadow-md">
+          <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          <span>Offline Mode: Functionality requiring network access (like Sync) is unavailable.</span>
+      </div>
+    {/if}
+    <!-- End Network Status Indicator -->
+
+    <h1 class="text-3xl font-bold mb-4">Nostr List Manager</h1>
+    <p class="mb-6 text-base-content/80">Create, manage, and browse hierarchical Nostr lists (NIP-51).</p>
+
   {#if $user}
     <!-- Render the modal (it's hidden by default) -->
     <CreateListModal bind:this={createListModalInstance} on:listcreated={handleListChanged} />
@@ -568,7 +582,12 @@
           Create New List
         </button>
         <!-- Existing Sync Button -->
-        <button class="btn btn-secondary btn-sm" on:click={() => handleSync({ isInitialSync: false })} disabled={isSyncing || $isHierarchyLoading || isLoadingInitialLists || isInitialSyncing || !$user}> <!-- Also disable during initial load -->
+        <button
+            class="btn btn-secondary btn-sm"
+            on:click={() => handleSync({ isInitialSync: false })}
+            disabled={isSyncing || $isHierarchyLoading || isLoadingInitialLists || isInitialSyncing || !$isOnline || !$user}
+            title={$isOnline ? (isSyncing || $isHierarchyLoading || isLoadingInitialLists || isInitialSyncing ? 'Action unavailable while loading/syncing' : (!$user ? 'Login required' : 'Fetch latest lists from relays')) : 'Sync unavailable while offline'}
+        >
           {#if isSyncing}
             <span class="loading loading-spinner loading-xs"></span>
             Syncing...

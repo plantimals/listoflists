@@ -6,6 +6,7 @@
   import { localDb, type StoredEvent } from '$lib/localDb'; // Import DB and StoredEvent type
   import { ndkService } from '$lib/ndkService'; // Added
   import { nip19 } from 'nostr-tools';
+  import { isOnline } from '$lib/networkStatusStore'; // <-- Ensure isOnline is imported
 
   let listName: string = '';
   let isSaving: boolean = false; // To disable button during processing
@@ -152,7 +153,13 @@
     <p class="text-xs text-base-content/70 mb-4">(Kind 30003 - Bookmark List. Item addition comes later.)</p>
 
     <div class="modal-action">
-      <button type="button" class="btn btn-primary" on:click={saveNewList} disabled={isSaving}>
+      <button
+          type="button"
+          class="btn btn-primary"
+          on:click={saveNewList}
+          disabled={isSaving || !$isOnline}
+          title={!$isOnline ? 'Cannot save while offline' : (isSaving ? 'Saving...' : 'Save new list')}
+      >
         {#if isSaving}
           <span class="loading loading-spinner loading-xs"></span>
           Saving...
