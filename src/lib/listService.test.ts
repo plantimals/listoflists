@@ -3,13 +3,8 @@ import NDK, { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
 import type { NDKSigner, NostrEvent } from '@nostr-dev-kit/ndk';
 import type { NDKUser } from '@nostr-dev-kit/ndk';
 import { localDb, type StoredEvent } from '$lib/localDb';
-import type { ListServiceDependencies } from '$lib/listService';
 import { addItemToList, removeItemFromList, type Item } from '$lib/listService';
 import { nip19 } from 'nostr-tools';
-
-// Remove outer scope mock function variables
-// let mockGetEventById: ReturnType<typeof vi.fn>;
-// let mockAddOrUpdateEvent: ReturnType<typeof vi.fn>;
 
 // Mock NDK
 vi.mock('@nostr-dev-kit/ndk', async (importOriginal) => {
@@ -31,11 +26,48 @@ vi.mock('@nostr-dev-kit/ndk', async (importOriginal) => {
 	};
 });
 
-// REMOVE the vi.mock for $lib/localDb
-// vi.mock('$lib/localDb', async () => { ... });
+// --- Add mocks for service/store --- 
+vi.mock('$lib/ndkService', () => ({
+    ndkService: {
+        getNdkInstance: vi.fn(),
+        getSigner: vi.fn(),
+    },
+}));
+
+vi.mock('$lib/userStore', async (importOriginal) => {
+    const actualUserStore = await importOriginal<typeof import('$lib/userStore')>();
+    return {
+        ...actualUserStore,
+        user: { // Mock the store itself
+            subscribe: vi.fn(),
+            set: vi.fn(),
+            update: vi.fn(),
+        }
+    };
+});
+
+// --- Update mock for svelte/store --- 
+vi.mock('svelte/store', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('svelte/store')>();
+	return {
+		...actual, // Keep other exports like readable, derived, etc.
+		get: vi.fn(), // Mock 'get' as before
+		writable: vi.fn().mockReturnValue({ // Mock 'writable'
+			subscribe: vi.fn(),
+			set: vi.fn(),
+			update: vi.fn(),
+		}),
+	};
+});
+// --- End mocks --- 
 
 // Access the mocked NDKUser
 const { NDKUser: MockNDKUser } = await import('@nostr-dev-kit/ndk');
+// --- Access mocked service/store/get --- 
+const { ndkService } = await import('$lib/ndkService');
+const { user } = await import('$lib/userStore');
+const { get } = await import('svelte/store');
+// --- End access ---
 
 // Spy variables for localDb methods and NDKEvent.sign
 let getLatestEventByCoordSpy: MockInstance<typeof localDb.getLatestEventByCoord>;
@@ -120,21 +152,22 @@ const expectedTags = {
 	coordinateList: ['a', `30001:${testPubkey}:list-coord`],
 };
 
-// Redefine ListServiceDependencies to match service expectations IF needed
-// The service actually imports { localDb } directly, so we don't need
-// to pass these methods via dependencies object. We only need
-// currentUser and ndkInstance for the service function signature.
-type TestDependencies = {
-	currentUser: NDKUser | null;
-	ndkInstance: NDK | null;
-}
-let testDeps: TestDependencies;
-
 // --- Test Suites ---
 describe('listService', () => {
 	beforeEach(() => {
 		// Reset spies and mocks
 		vi.resetAllMocks();
+
+		// --- Setup mocks for service/store/get --- 
+        vi.mocked(ndkService.getNdkInstance).mockReturnValue(mockNdkInstance as NDK);
+        vi.mocked(ndkService.getSigner).mockReturnValue(mockSigner);
+        vi.mocked(get).mockImplementation((store) => {
+            if (store === user) {
+                return currentUser;
+            }
+            return undefined; // Or throw error for unexpected stores
+        });
+        // --- End setup mocks ---
 
 		// Set up spies on the ACTUAL localDb methods
 		getLatestEventByCoordSpy = vi.spyOn(localDb, 'getLatestEventByCoord').mockResolvedValue(baseList);
@@ -147,12 +180,6 @@ describe('listService', () => {
 			this.sig = `mock_sig_${Date.now()}`;
 			return this.sig;
 		});
-
-		// Set up test dependencies object passed to service function
-		testDeps = {
-			currentUser: currentUser,
-			ndkInstance: mockNdkInstance as NDK,
-		};
 	});
 
 	afterEach(() => {
@@ -173,7 +200,7 @@ describe('listService', () => {
 			['coordinateList', inputs.coordinateList, expectedTags.coordinateList],
 			// Add hexPubkey test if ambiguity handling changes (e.g., to 'p')
 		])('should correctly add item for %s input', async (inputType, inputString, expectedTag) => {
-			const result = await addItemToList(listCoordinateId, inputString, testDeps);
+			const result = await addItemToList(listCoordinateId, inputString);
 			
 			expect(result.success).toBe(true);
 			expect(result.error).toBeUndefined();
@@ -200,7 +227,7 @@ describe('listService', () => {
 			};
 			getLatestEventByCoordSpy.mockResolvedValue(listWithItem);
 
-			const result = await addItemToList(listCoordinateId, inputs.note, testDeps);
+			const result = await addItemToList(listCoordinateId, inputs.note);
 
 			expect(result.success).toBe(true);
 			expect(result.error).toBeUndefined();
@@ -213,7 +240,7 @@ describe('listService', () => {
 		});
 
 		it('should return error for invalid input format', async () => {
-			const result = await addItemToList(listCoordinateId, inputs.invalid, testDeps);
+			const result = await addItemToList(listCoordinateId, inputs.invalid);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain('Invalid input format');
 			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(testKind, testPubkey, testDTag);
@@ -222,7 +249,7 @@ describe('listService', () => {
 		});
 
 		it('should return error for empty input', async () => {
-			 const result = await addItemToList(listCoordinateId, inputs.empty, testDeps);
+			 const result = await addItemToList(listCoordinateId, inputs.empty);
 			 expect(result.success).toBe(false);
 			 expect(result.error).toBe('Input cannot be empty');
 			 expect(getLatestEventByCoordSpy).not.toHaveBeenCalled();
@@ -234,7 +261,7 @@ describe('listService', () => {
 		it('should return error if list event not found locally by coordinate', async () => {
 			getLatestEventByCoordSpy.mockResolvedValueOnce(undefined);
 			// Pass string input instead of object
-			const result = await addItemToList(listCoordinateId, inputs.note, testDeps);
+			const result = await addItemToList(listCoordinateId, inputs.note);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain(`List event with coordinate ${listCoordinateId} not found locally`);
 			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(testKind, testPubkey, testDTag);
@@ -243,28 +270,36 @@ describe('listService', () => {
 		});
 
 		it('should return error if currentUser is not available', async () => {
-			const depsWithoutUser: TestDependencies = { ...testDeps, currentUser: null };
+			// Mock get(user) to return null
+			vi.mocked(get).mockImplementation((store) => {
+				if (store === user) {
+					return null;
+				}
+				return undefined;
+			});
 			// Pass string input
-			const result = await addItemToList(listCoordinateId, inputs.note, depsWithoutUser);
+			const result = await addItemToList(listCoordinateId, inputs.note);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('User not logged in');
+			// User check happens before DB query
 		});
 
 		 it('should return error if NDK instance is not available', async () => {
-			 const depsWithoutNdk: TestDependencies = { ...testDeps, ndkInstance: null };
-			 // Pass string input
-			 const result = await addItemToList(listCoordinateId, inputs.note, depsWithoutNdk);
+			 // Mock ndkService.getNdkInstance to return null
+			 vi.mocked(ndkService.getNdkInstance).mockReturnValue(null as unknown as NDK);
+			 const result = await addItemToList(listCoordinateId, inputs.note);
 			 expect(result.success).toBe(false);
 			 expect(result.error).toBe('NDK not initialized');
+			 // NDK check happens before DB query
 		 });
 
 		it('should return error if signer is not available', async () => {
-			const ndkWithoutSigner = { ...mockNdkInstance, signer: undefined } as Partial<NDK>;
-			const depsWithoutSigner: TestDependencies = { ...testDeps, ndkInstance: ndkWithoutSigner as NDK };
-			 // Pass string input
-			const result = await addItemToList(listCoordinateId, inputs.note, depsWithoutSigner);
+			// Mock ndkService.getSigner to return undefined
+			vi.mocked(ndkService.getSigner).mockReturnValue(undefined);
+			const result = await addItemToList(listCoordinateId, inputs.note);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('Nostr signer not available (NIP-07?)');
+			// Signer check happens before DB query
 		});
 
 		it('should return error if event pubkey does not match currentUser.pubkey', async () => {
@@ -273,7 +308,7 @@ describe('listService', () => {
 			// This tests the second safety check inside the function.
 			getLatestEventByCoordSpy.mockResolvedValueOnce(otherUsersList);
 			 // Pass string input
-			const result = await addItemToList(listCoordinateId, inputs.note, testDeps);
+			const result = await addItemToList(listCoordinateId, inputs.note);
 			expect(result.success).toBe(false);
 			// Correct the expected error message based on the actual code path tested
 			expect(result.error).toBe('List ownership mismatch. Cannot modify.'); 
@@ -287,7 +322,7 @@ describe('listService', () => {
 			const signError = new Error('Signature failed');
 			signSpy.mockRejectedValueOnce(signError);
 			 // Pass string input
-			const result = await addItemToList(listCoordinateId, inputs.note, testDeps);
+			const result = await addItemToList(listCoordinateId, inputs.note);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain(signError.message);
 			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(testKind, testPubkey, testDTag);
@@ -300,7 +335,7 @@ describe('listService', () => {
 			getLatestEventByCoordSpy.mockResolvedValueOnce({ ...baseList }); // Use copy
 			addOrUpdateEventSpy.mockRejectedValueOnce(dbError);
 			 // Pass string input
-			const result = await addItemToList(listCoordinateId, inputs.note, testDeps);
+			const result = await addItemToList(listCoordinateId, inputs.note);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain(dbError.message);
 			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(testKind, testPubkey, testDTag);
@@ -310,7 +345,7 @@ describe('listService', () => {
 
 		it('should return error if DB lookup finds event for different user (safety check)', async () => {
 			getLatestEventByCoordSpy.mockResolvedValueOnce(otherUsersList); // Mock DB returns event with otherUserPubkey
-			const result = await addItemToList(listCoordinateId, inputs.note, testDeps);
+			const result = await addItemToList(listCoordinateId, inputs.note);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('List ownership mismatch. Cannot modify.'); // Fix: Expect this specific error
 			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(testKind, testPubkey, testDTag);
@@ -322,7 +357,7 @@ describe('listService', () => {
 		const nonExistentItem: Item = { type: 'e', value: 'non_existent_id' };
 
 		it('should remove an existing item and save a new event version', async () => {
-			const result = await removeItemFromList(listCoordinateId, itemToRemove, testDeps);
+			const result = await removeItemFromList(listCoordinateId, itemToRemove);
 
 			expect(result.success).toBe(true);
 			expect(result.error).toBeUndefined();
@@ -345,7 +380,7 @@ describe('listService', () => {
 		});
 
 		it('should proceed successfully even if item to remove is not found', async () => {
-			const result = await removeItemFromList(listCoordinateId, nonExistentItem, testDeps);
+			const result = await removeItemFromList(listCoordinateId, nonExistentItem);
 
 			expect(result.success).toBe(true);
 			expect(result.error).toBeUndefined();
@@ -362,7 +397,7 @@ describe('listService', () => {
 
 		it('should return error for invalid coordinate ID format', async () => {
 			const invalidCoord = '123:abc';
-			const result = await removeItemFromList(invalidCoord, itemToRemove, testDeps);
+			const result = await removeItemFromList(invalidCoord, itemToRemove);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('Invalid list coordinate ID format.');
 			expect(getLatestEventByCoordSpy).not.toHaveBeenCalled();
@@ -370,7 +405,7 @@ describe('listService', () => {
 
 		it('should return error if user pubkey does not match coordinate pubkey', async () => {
 			const wrongUserCoord = `${testKind}:${otherUserPubkey}:${testDTag}`; // Uses fixed valid otherUserPubkey
-			const result = await removeItemFromList(wrongUserCoord, itemToRemove, testDeps);
+			const result = await removeItemFromList(wrongUserCoord, itemToRemove);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('Cannot modify a list belonging to another user.'); // Assertion should now be correct
 			expect(getLatestEventByCoordSpy).not.toHaveBeenCalled();
@@ -378,7 +413,7 @@ describe('listService', () => {
 
 		it('should return error if list event not found locally by coordinate', async () => {
 			getLatestEventByCoordSpy.mockResolvedValueOnce(undefined);
-			const result = await removeItemFromList(listCoordinateId, itemToRemove, testDeps);
+			const result = await removeItemFromList(listCoordinateId, itemToRemove);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain(`List event with coordinate ${listCoordinateId} not found locally`);
 			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(testKind, testPubkey, testDTag);
@@ -386,37 +421,47 @@ describe('listService', () => {
 
 		it('should return error if DB lookup finds event for different user (safety check)', async () => {
 			getLatestEventByCoordSpy.mockResolvedValueOnce(otherUsersList);
-			const result = await removeItemFromList(listCoordinateId, itemToRemove, testDeps);
+			const result = await removeItemFromList(listCoordinateId, itemToRemove);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('List ownership mismatch. Cannot modify.');
 			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(testKind, testPubkey, testDTag);
 		});
 
 		it('should return error if currentUser is not available', async () => {
-			const depsWithoutUser: TestDependencies = { ...testDeps, currentUser: null };
-			const result = await removeItemFromList(listCoordinateId, itemToRemove, depsWithoutUser);
+			// Mock get(user) to return null
+			vi.mocked(get).mockImplementation((store) => {
+				if (store === user) {
+					return null;
+				}
+				return undefined;
+			});
+			const result = await removeItemFromList(listCoordinateId, itemToRemove);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('User not logged in');
+			// User check happens before DB query
 		});
 
 		it('should return error if NDK instance is not available', async () => {
-			 const depsWithoutNdk: TestDependencies = { ...testDeps, ndkInstance: null };
-			 const result = await removeItemFromList(listCoordinateId, itemToRemove, depsWithoutNdk);
+			 // Mock ndkService.getNdkInstance to return null
+			 vi.mocked(ndkService.getNdkInstance).mockReturnValue(null as unknown as NDK);
+			 const result = await removeItemFromList(listCoordinateId, itemToRemove);
 			 expect(result.success).toBe(false);
 			 expect(result.error).toBe('NDK not initialized');
+			 // NDK check happens before DB query
 		 });
 
 		it('should return error if signer is not available', async () => {
-			const ndkWithoutSigner = { ...mockNdkInstance, signer: undefined };
-			const depsWithoutSigner: TestDependencies = { ...testDeps, ndkInstance: ndkWithoutSigner as NDK };
-			const result = await removeItemFromList(listCoordinateId, itemToRemove, depsWithoutSigner);
+			// Mock ndkService.getSigner to return undefined
+			vi.mocked(ndkService.getSigner).mockReturnValue(undefined);
+			const result = await removeItemFromList(listCoordinateId, itemToRemove);
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('Nostr signer not available (NIP-07?)');
+			// Signer check happens before DB query
 		});
 
 		it('should handle signing errors gracefully', async () => {
 			signSpy.mockRejectedValueOnce(new Error('Signing failed'));
-			const result = await removeItemFromList(listCoordinateId, itemToRemove, testDeps);
+			const result = await removeItemFromList(listCoordinateId, itemToRemove);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain('Signing failed');
 			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
@@ -424,7 +469,7 @@ describe('listService', () => {
 
 		it('should handle DB save errors gracefully', async () => {
 			addOrUpdateEventSpy.mockRejectedValueOnce(new Error('DB write failed'));
-			const result = await removeItemFromList(listCoordinateId, itemToRemove, testDeps);
+			const result = await removeItemFromList(listCoordinateId, itemToRemove);
 			expect(result.success).toBe(false);
 			expect(result.error).toContain('DB write failed');
 			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce(); // Attempted to save

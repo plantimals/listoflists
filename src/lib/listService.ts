@@ -1,26 +1,22 @@
 import { NDKEvent } from '@nostr-dev-kit/ndk';
-import type NDK from '@nostr-dev-kit/ndk';
-import type { NDKUser } from '@nostr-dev-kit/ndk';
 import { localDb, type StoredEvent } from '$lib/localDb';
 import { nip19 } from 'nostr-tools'; // Import nip19 from nostr-tools
+import { ndkService } from '$lib/ndkService';
+import { user } from '$lib/userStore';
+import { get } from 'svelte/store';
 
 // Interfaces (Define Item here and export it)
 export interface Item {
     type: 'p' | 'e' | 'a'; // Allow 'a' type
     value: string;
     relay?: string; // Optional relay hint
+    newEventId?: string;
 }
 
 export interface ServiceResult {
     success: boolean;
     error?: string;
     newEventId?: string;
-}
-
-// Interface for required dependencies
-export interface ListServiceDependencies {
-    currentUser: NDKUser | null;
-    ndkInstance: NDK | null;
 }
 
 // Helper function to parse coordinate ID
@@ -42,15 +38,15 @@ function parseCoordinateId(coordinateId: string): { kind: number; pubkey: string
  * Creates a new version of the event, signs it, and saves it locally as unpublished.
  * @param listCoordinateId The coordinate ID (kind:pubkey or kind:pubkey:dTag) of the list to modify.
  * @param itemInput The raw identifier string (npub, note1, naddr, nevent, hex ID, coordinate) to add.
- * @param deps An object containing { currentUser, ndkInstance }.
  * @returns Promise<ServiceResult> indicating success or failure.
  */
 export async function addItemToList(
     listCoordinateId: string,
-    itemInput: string,
-    deps: ListServiceDependencies
+    itemInput: string
 ): Promise<ServiceResult> {
-    const { currentUser, ndkInstance } = deps;
+    const currentUser = get(user);
+    const ndkInstance = ndkService.getNdkInstance(); // Get instance from service
+    const signer = ndkService.getSigner(); // Get signer from service
     const trimmedInput = itemInput.trim();
     console.log(`addItemToList called for list coordinate: ${listCoordinateId}, input: "${trimmedInput}"`);
 
@@ -60,7 +56,7 @@ export async function addItemToList(
     if (!ndkInstance) {
         return { success: false, error: 'NDK not initialized' };
     }
-    if (!ndkInstance.signer) {
+    if (!signer) {
         return { success: false, error: 'Nostr signer not available (NIP-07?)' };
     }
     if (!trimmedInput) {
@@ -166,7 +162,7 @@ export async function addItemToList(
         console.log('New final tags:', newTags);
 
         console.log('Attempting to sign the new list event version...');
-        await newEvent.sign(ndkInstance.signer);
+        await newEvent.sign(signer);
         console.log('New event signed successfully. ID:', newEvent.id, 'Sig:', newEvent.sig);
 
         if (!newEvent.sig || !newEvent.id) {
@@ -202,15 +198,15 @@ export async function addItemToList(
  * Creates a new version of the event, signs it, and saves it locally as unpublished.
  * @param listCoordinateId The coordinate ID (kind:pubkey or kind:pubkey:dTag) of the list to modify.
  * @param itemToRemove The item {type: 'p'|'e'|'a', value: string, relay?: string} to remove.
- * @param deps An object containing { currentUser, ndkInstance }.
  * @returns Promise<ServiceResult> indicating success or failure.
  */
 export async function removeItemFromList(
-    listCoordinateId: string, 
-    itemToRemove: Item, 
-    deps: ListServiceDependencies
+    listCoordinateId: string,
+    itemToRemove: Item
 ): Promise<ServiceResult> {
-    const { currentUser, ndkInstance } = deps;
+    const currentUser = get(user);
+    const ndkInstance = ndkService.getNdkInstance(); // Get instance from service
+    const signer = ndkService.getSigner(); // Get signer from service
     console.log(`removeItemFromList called for list coordinate: ${listCoordinateId}, item:`, itemToRemove);
 
      if (!currentUser?.pubkey) {
@@ -219,7 +215,7 @@ export async function removeItemFromList(
     if (!ndkInstance) {
         return { success: false, error: 'NDK not initialized' };
     }
-     if (!ndkInstance.signer) {
+     if (!signer) {
         return { success: false, error: 'Nostr signer not available (NIP-07?)' };
     }
 
@@ -249,8 +245,8 @@ export async function removeItemFromList(
          console.log('Found current list event by coordinate:', currentStoredEvent);
 
         const newEvent = new NDKEvent(ndkInstance);
-        newEvent.kind = currentStoredEvent.kind; // Use kind from fetched event
-        newEvent.pubkey = currentUser.pubkey; // Set pubkey explicitly
+        newEvent.kind = currentStoredEvent.kind;
+        newEvent.pubkey = currentUser.pubkey;
         newEvent.content = currentStoredEvent.content;
         newEvent.created_at = Math.floor(Date.now() / 1000);
 
@@ -269,7 +265,7 @@ export async function removeItemFromList(
         console.log('New tags after removal attempt:', newTags);
 
         console.log('Attempting to sign the new list event version...');
-        await newEvent.sign(ndkInstance.signer);
+        await newEvent.sign(signer);
          console.log('New event signed successfully. ID:', newEvent.id, 'Sig:', newEvent.sig);
         
          if (!newEvent.sig || !newEvent.id) {
