@@ -18,6 +18,7 @@
   import { writable } from 'svelte/store';
   import { nip19 } from 'nostr-tools';
   import AddItemModal from '$lib/components/AddItemModal.svelte'; // Import the Add Item modal
+  import { syncService } from '$lib/syncService'; // <-- IMPORT syncService
 
   let isLoadingProfile: boolean = false;
   let isLoadingInitialLists: boolean = false; // Initial load from local + potentially network
@@ -114,20 +115,41 @@
               return;
           }
 
-          console.log('Attempting to fetch latest user profile from network for pubkey:', pubkey);
-          const latestProfile = await ndkService.fetchProfile(pubkey);
+          console.log('Attempting to fetch latest user profile event from network for pubkey:', pubkey);
+          // Fetch Kind 0 event instead of non-existent fetchProfile
+          const profileEvents = await ndkService.fetchEvents({ kinds: [NDKKind.Metadata], authors: [pubkey], limit: 1 });
+          const latestProfileEvent = profileEvents.size > 0 ? Array.from(profileEvents)[0] : null;
 
-          if (latestProfile) {
-              console.log('Fetched profile from network:', latestProfile);
-              // Store the fetched profile in local DB (this replaces the old one if it exists)
-              await localDb.saveProfile(pubkey, latestProfile);
+          if (latestProfileEvent) {
+              console.log('Fetched latest profile event from network:', latestProfileEvent.rawEvent());
+              // Convert to StoredEvent and save using addOrUpdateProfile
+               const storedProfileEvent: StoredEvent = {
+                    id: latestProfileEvent.id,
+                    kind: latestProfileEvent.kind ?? 0,
+                    pubkey: latestProfileEvent.pubkey,
+                    created_at: latestProfileEvent.created_at ?? 0,
+                    tags: latestProfileEvent.tags,
+                    content: latestProfileEvent.content,
+                    sig: latestProfileEvent.sig ?? '',
+                    // rawEvent: JSON.stringify(latestProfileEvent.rawEvent()) // Optional
+                };
+              // Use addOrUpdateProfile which internally calls addOrUpdateEvent and handles profile table
+              await localDb.addOrUpdateProfile(storedProfileEvent);
 
-              // TODO: PF1.2 - Refine this update: Only update the store if the fetched
-              // profile is different from or newer than the initially loaded local one.
-              // For now, we'll update it unconditionally after fetch.
-              profile.set(latestProfile);
+              // Update the profile store with the parsed content
+              try {
+                 const parsedProfile = JSON.parse(storedProfileEvent.content) as NDKUserProfile;
+                 // Defensive check: only update store if it's still for the same user
+                 if (get(user)?.pubkey === pubkey) {
+                     profile.set(parsedProfile);
+                     console.log('Profile store updated with newly fetched profile data.');
+                 }
+              } catch(parseError) {
+                 console.error("Error parsing fetched profile content:", parseError);
+              }
+
           } else {
-              console.log('No profile found on network for pubkey:', pubkey);
+              console.log('No profile event (Kind 0) found on network for pubkey:', pubkey);
               // If network fetch fails *after* a local load, we keep the local profile displayed.
               // If there was no local profile either, it remains null.
           }
@@ -245,26 +267,24 @@
           // >>>>> End Update Loading States <<<<<
 
           // 3. Trigger Initial Background Sync using handleSync
-          console.log("Initial local load complete. Triggering initial background sync...");
-          isInitialSyncing = true; // Set the specific flag for this background task
+          console.log("Initial local load complete. Triggering initial background sync via SyncService...");
+          isInitialSyncing = true; // Set flag
 
-          // Call handleSync without await and pass the initial sync flag
-          handleSync({ isInitialSync: true })
+          // Call the service directly, handle completion/error
+          syncService.performSync({ isInitialSync: true })
+              .then(refreshWasNeeded => {
+                  console.log(`[+page.svelte] Initial background sync completed via service. Refresh needed indication: ${refreshWasNeeded}`);
+                  // Note: The UI refresh based on this is typically handled later by manual sync or refreshTrigger
+                  // If a refresh *was* indicated by the initial sync, we might want to trigger
+                  // loadDataAndBuildHierarchy again, but carefully to avoid loops.
+                  // For now, just logging. Subsequent manual syncs will pick up changes.
+              })
               .catch(error => {
-                  // Catch errors specifically from the background sync
-                  console.error("Initial background sync encountered an error:", error);
-                  // Optionally: Display a non-blocking error message to the user
+                  console.error("[+page.svelte] Initial background sync via SyncService failed:", error);
               })
               .finally(() => {
-                   // Ensure the initial syncing flag is reset when done
-                  // Only reset flag if still the same user
-                  const currentLoggedInPubkeyAfterSync = get(user)?.pubkey;
-                  if (currentLoggedInPubkeyAfterSync === pubkey) {
-                       isInitialSyncing = false;
-                       console.log("Initial background sync process finished.");
-                  } else {
-                       console.log("User changed during background sync, initial sync flag not reset.");
-                  }
+                  isInitialSyncing = false; // Reset flag
+                  console.log("[+page.svelte] Initial background sync process finished.");
               });
 
       } catch (error) {
@@ -285,6 +305,12 @@
 
   // ---- IMPLEMENTED SYNC HANDLER ----
   async function handleSync(options?: { isInitialSync?: boolean }) {
+    const currentUser = get(user);
+    if (!currentUser?.pubkey) {
+        console.warn('Sync requested, but no user is logged in.');
+        return;
+    }
+
     // 2. Determine Context
     const isInitial = options?.isInitialSync ?? false;
     const syncContext = isInitial ? 'initial' : 'manual';
@@ -306,84 +332,13 @@
     let refreshNeeded = false; // Reset flag at the start of each sync
 
     try {
-      const pubkey = get(user)?.pubkey; // Get current user pubkey
-      if (!pubkey) {
-        console.error('Cannot sync without user pubkey.');
-        // Optionally set an error state here
-        // Reset syncing flag *only* if it was set for manual sync
-        if (!isInitial) isSyncing = false;
-        return;
-      }
+      // <<< --- REPLACE OLD SYNC LOGIC --- >>>
+      console.log(`[Sync ${syncContext}] Calling syncService.performSync for ${currentUser.pubkey}...`);
 
-      // 1. Fetch latest NIP-51 list events for the user from relays
-      console.log(`[Sync ${syncContext}] Fetching latest NIP-51 events for ${pubkey}...`);
-      // Using original DB access pattern
-      const lastSyncTimestamp = (await localDb.settings.get('lastSyncTimestamp'))?.value ?? 0;
-      const since = lastSyncTimestamp > 0 ? lastSyncTimestamp : undefined;
-      console.log(`[Sync ${syncContext}] Fetching lists created since: ${since ? new Date(since * 1000) : 'beginning'}`);
+      refreshNeeded = await syncService.performSync(options);
 
-      // Using original filter structure & NDKKind
-      const userListsEvents = await ndkService.fetchEvents([
-        { kinds: [NDKKind.CategorizedPeopleList], authors: [pubkey], since: since },
-        { kinds: [NDKKind.PinList], authors: [pubkey], since: since }
-      ]);
-      console.log(`[Sync ${syncContext}] Fetched ${userListsEvents.size} NIP-51 list/set events.`);
-
-      // 2. Fetch associated profiles and notes
-      const referencedPubkeys = new Set<string>();
-      const referencedEventIds = new Set<string>();
-      for (const listEvent of userListsEvents) {
-        listEvent.tags.forEach((tag) => {
-          if (tag[0] === 'p' && tag[1]) referencedPubkeys.add(tag[1]);
-          if (tag[0] === 'e' && tag[1]) referencedEventIds.add(tag[1]);
-          // 'a' tag handling placeholder
-        });
-      }
-
-      const profilesToFetch = Array.from(referencedPubkeys);
-      const notesToFetch = Array.from(referencedEventIds);
-      let referencedEvents = new Set<NDKEvent>();
-
-      if (profilesToFetch.length > 0) {
-        console.log(`[Sync ${syncContext}] Fetching ${profilesToFetch.length} referenced profiles...`);
-        referencedEvents = new Set([
-          ...referencedEvents,
-          ...(await ndkService.fetchEvents({ kinds: [NDKKind.Profile], authors: profilesToFetch }))
-        ]);
-      }
-      if (notesToFetch.length > 0) {
-        console.log(`[Sync ${syncContext}] Fetching ${notesToFetch.length} referenced notes...`);
-        referencedEvents = new Set([
-          ...referencedEvents,
-          ...(await ndkService.fetchEvents({ kinds: [NDKKind.Text], ids: notesToFetch }))
-        ]);
-      }
-      console.log(`[Sync ${syncContext}] Fetched ${referencedEvents.size} referenced profile/note events.`);
-
-      // 3. Store fetched events
-      const allFetchedEvents = [...userListsEvents, ...referencedEvents];
-      if (allFetchedEvents.length > 0) {
-        // Using original DB access pattern
-        const changes = await localDb.storeEvents(allFetchedEvents);
-        if (changes.added > 0 || changes.updated > 0) {
-          refreshNeeded = true;
-          console.log(`[Sync ${syncContext}] Stored/Updated events in DB: ${changes.added} added, ${changes.updated} updated.`);
-        } else {
-          console.log(`[Sync ${syncContext}] No new or updated events to store in DB.`);
-        }
-      } else {
-        console.log(`[Sync ${syncContext}] No events fetched from relays.`);
-      }
-
-      // 4. Update last sync timestamp
-      const newSyncTimestamp = Math.floor(Date.now() / 1000);
-      // Using original DB access pattern
-      await localDb.settings.put({ key: 'lastSyncTimestamp', value: newSyncTimestamp });
-      console.log(`[Sync ${syncContext}] Updated last sync timestamp to: ${new Date(newSyncTimestamp * 1000)}`);
-
-      // 5. (Post-MVP) Publish queued local changes placeholder
-      console.log(`[Sync ${syncContext}] Publishing local changes (Not Implemented)`);
-      // await publishLocalChanges();
+      console.log(`[Sync ${syncContext}] syncService.performSync finished. Refresh needed: ${refreshNeeded}`);
+      // <<< --- END REPLACEMENT --- >>>
 
       // 4. Conditional Data Refresh
       if (!isInitial && refreshNeeded) {

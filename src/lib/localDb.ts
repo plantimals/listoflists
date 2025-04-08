@@ -11,6 +11,7 @@ export interface StoredEvent {
 	sig: string;
 	dTag?: string; // Optional dTag for parametrized replaceable events
 	published?: boolean; // L6.1: Track publish status (true = published, false/undefined = local unpublished)
+	rawEvent?: string; // Optional: Store the raw event JSON string
 }
 
 export interface StoredProfile {
