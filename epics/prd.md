@@ -1,7 +1,7 @@
 # Product Requirements Document: Nostr Hierarchical Curation List Manager
 
-* **Version:** 1.4 (was 1.3, updated based on user feedback)
-* **Date:** April 8, 2025
+* **Version:** 1.5 (was 1.4, updated based on user feedback)
+* **Date:** April 9, 2025
 * **Author:** Gemini (as Senior Product Manager), incorporating feedback from user.
 * **Status:** Draft
 
@@ -43,7 +43,7 @@ This application aims to provide the necessary tooling for structured curation o
 
 ## 5. Proposed Solution & Workflow
 
-The application will function as a Nostr client specializing in list management and Browse, prioritizing local data:
+The application will function as a Nostr client specializing in list management and browsing, prioritizing local data:
 
 1.  **Authentication & Signing:** User authenticates/signs actions via **NIP-07** (browser extension) or **NIP-46** (remote signing, e.g., via Amber on mobile) to save/load their lists. Relays used are determined by the signing provider or defaults.
 2.  **Local-First Data:** User's created lists, fetched external lists, profiles, and event content are **cached locally** (using Dexie/IndexedDB). Synchronization with Nostr relays occurs for publishing updates and fetching new data. The app remains usable (for viewing cached data) offline.
@@ -66,7 +66,7 @@ The application will function as a Nostr client specializing in list management 
 
 ## 6. Functional Requirements (FR)
 
-| ID    | Requirement                                                                                                                                                                               | Priority  | Notes                                                                                                                                          |
+| ID    | Requirement                                                                                                                                                                              | Priority  | Notes                                                                                                                                          |
 | :---- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------- | :--------------------------------------------------------------------------------------------------------------------------------------------- |
 | FR-01 | **Multi-Signer Support:** Allow users to authenticate and sign events via **NIP-07** (browser extensions) AND **NIP-46** (remote signing).                                                  | Must Have | Crucial for desktop and mobile usability. App uses relays provided by signer.                                                                  |
 | FR-02 | **List Creation/Persistence:** Users can create named lists, saved as Nostr events (e.g., `kind:30001` using NIP-51 structure) associated with their pubkey.                              | Must Have | Core creation. Use `d` tag for list identifier/name.                                                                                           |
@@ -87,16 +87,17 @@ The application will function as a Nostr client specializing in list management 
 
 ## 7. Non-Functional Requirements (NFR)
 
-| ID     | Requirement      | Details                                                                                                                                   |
-| :----- | :--------------- | :---------------------------------------------------------------------------------------------------------------------------------------- |
-| NFR-01 | **Local-First:** | **Prioritize local data storage.** App must be usable for Browse/managing cached lists offline. Sync with network opportunistically.         |
-| NFR-02 | **Performance:** | Fetching, parsing, rendering, local storage ops must be performant, especially with deep nesting/recursion. Lazy loading crucial.         |
-| NFR-03 | **Usability:** | Interface for managing nested lists must be highly intuitive. Profile view, discovery flow, aggregated feed must be clear.                |
-| NFR-04 | **Scalability:** | Handle lists with significant depth/breadth and many items without performance degradation.                                                |
-| NFR-05 | **Reliability:** | Accurately save/load/sync lists. Robust handling of errors (relay, signing, parsing, cycles, offline, sync conflicts).                     |
-| NFR-06 | **Security:** | Secure handling of private keys via NIP-07/NIP-46. Clear user consent for signing actions.                                                  |
-| NFR-07 | **Interoperability:** | Adhere closely to NIP-51 standards for list events.                                                                                     |
-| NFR-08 | **Resource Usage:** | Efficient use of local storage, memory, CPU.                                                                                             |
+| ID     | Requirement      | Details                                                                                                                                                                                                                                                                                                                       |
+| :----- | :--------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| NFR-01 | **Local-First:** | **Prioritize local data storage.** App must be usable for browsing/managing cached lists offline. Sync with network opportunistically.                                                                                                                                                                                          |
+| NFR-02 | **Performance:** | Fetching, parsing, rendering, local storage ops must be performant, especially with deep nesting/recursion. Lazy loading crucial.                                                                                                                                                                                                |
+| NFR-03 | **Usability:** | Interface for managing nested lists must be highly intuitive. Profile view, discovery flow, aggregated feed must be clear.                                                                                                                                                                                                       |
+| NFR-04 | **Scalability:** | Handle lists with significant depth/breadth and many items without performance degradation.                                                                                                                                                                                                                                       |
+| NFR-05 | **Reliability:** | Accurately save/load/sync lists. Robust handling of errors (relay, signing, parsing, cycles, offline, sync conflicts).                                                                                                                                                                                                            |
+| NFR-06 | **Security:** | Secure handling of private keys via NIP-07/NIP-46. Clear user consent for signing actions.                                                                                                                                                                                                                                        |
+| NFR-07 | **Interoperability:** | Adhere closely to NIP-51 standards for list events.                                                                                                                                                                                                                                                                           |
+| NFR-08 | **Resource Usage:** | Efficient use of local storage, memory, CPU.                                                                                                                                                                                                                                                                                  |
+| **NFR-09** | **Design Quality & Consistency** | **The user interface must prioritize clarity, efficiency, and visual consistency. Implementation should adhere to established design guidelines heavily influenced by the principles of "Refactoring UI" (e.g., spacing, hierarchy, color) and Edward Tufte (e.g., data-ink ratio, minimizing chartjunk) to ensure a professional and highly usable experience. Detailed guidelines should be maintained separately (e.g., in a Style Guide or Design System document).** |
 
 ## 8. Technology Stack (Current)
 
@@ -137,3 +138,5 @@ Acknowledging that development is underway, the current technology stack include
 * Import/Export formats.
 * Full-text search within curated list content.
 * Proportional zapping configuration (FR-16). Basic zaps (FR-15) are Should Have.
+
+

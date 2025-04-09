@@ -13,7 +13,7 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:ui": "vitest --ui",
-		"repomix": "repomix . --ignore ai/,node_modules/ -o ai/repomix-output.txt"
+		"repomix": "repomix . --ignore ai/,node_modules/,*.svg,epics/ -o ai/repomix-output.txt"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^4.0.0",
