@@ -15,6 +15,8 @@
     import { NDKEvent } from '@nostr-dev-kit/ndk';
     import { nip19 } from 'nostr-tools'; // Import nip19
     import { isOnline } from '$lib/networkStatusStore'; // <-- Ensure isOnline is imported
+    // --- REMOVING ICON IMPORT FOR NOW ---
+    // import { PlusIcon } from 'svelte-hero-icons'; 
 
     export let node: TreeNodeData; // Corrected type annotation
     export let level: number = 0;
@@ -61,9 +63,9 @@
         // Removed get(ndk) and related check
 
         try {
-            const originalListEventData = await localDb.getEventById(node.id); // Use list ID from node
+            const originalListEventData = await localDb.getEventById(node.eventId); // Use list ID from node
             if (!originalListEventData) {
-                throw new Error(`Original list event ${node.id} not found locally.`);
+                throw new Error(`Original list event ${node.eventId} not found locally.`);
             }
 
             // Create a new NDKEvent instance using the NDK instance from the service
@@ -75,24 +77,18 @@
             newListEvent.tags = originalListEventData.tags.filter(tag => !(tag[0] === itemType && tag[1] === itemId));
 
             // Re-add replaceable list identifier tags if needed (e.g., 'd')
-            const dTag = originalListEventData.tags.find(tag => tag[0] === 'd');
-            if (dTag && !newListEvent.tags.some(tag => tag[0] === 'd')) {
-                newListEvent.tags.push(dTag);
+            const dTagValue = originalListEventData.tags.find(tag => tag[0] === 'd')?.[1];
+            if (dTagValue && !newListEvent.tags.some(tag => tag[0] === 'd')) {
+                newListEvent.tags.push(['d', dTagValue]);
             }
-            const titleTag = originalListEventData.tags.find(tag => tag[0] === 'title');
-             if (titleTag && !newListEvent.tags.some(tag => tag[0] === 'title')) {
-                newListEvent.tags.push(titleTag);
+            const titleValue = originalListEventData.tags.find(tag => tag[0] === 'title')?.[1];
+             if (titleValue && !newListEvent.tags.some(tag => tag[0] === 'title')) {
+                newListEvent.tags.push(['title', titleValue]);
             }
 
             // Sign using the signer from the service
             await newListEvent.sign(signer);
             console.log('Signed event after item removal:', newListEvent);
-
-            // Publish using the service
-            const publishedTo = await ndkService.publish(newListEvent);
-            if (publishedTo.size === 0) {
-                throw new Error('Updated list event was not published to any relays.');
-            }
 
             // Save updated event to local DB
             const storedEventData: StoredEvent = {
@@ -104,7 +100,7 @@
                  tags: newListEvent.tags,
                  content: newListEvent.content,
                  sig: newListEvent.sig ?? '',
-                 dTag: dTag?.[1], // Add dTag if present
+                 dTag: dTagValue, // Use stored dTagValue
                  published: false // Mark as unpublished until sync confirms
             };
             await localDb.addOrUpdateEvent(storedEventData);
@@ -237,13 +233,26 @@
         {node.name}
     </span>
 
-    <!-- Badges -->
-    <div class="flex-shrink-0 space-x-1">
+    <!-- Badges and Add Button (Merged) -->
+    <div class="flex items-center flex-shrink-0 space-x-1 ml-auto">
+        <!-- Badges -->
         <div class="badge badge-neutral badge-sm font-mono" title="Kind">K:{node.kind}</div>
         {#if node.dTag}
             <div class="badge badge-outline badge-sm font-mono" title="dTag">{node.dTag}</div>
         {/if}
         <div class="badge badge-outline badge-sm" title="Items">{node.itemCount} items</div>
+
+        <!-- Add Button -->
+        {#if node.pubkey === $user?.pubkey}
+            <button
+                class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-accent disabled:text-base-content/30"
+                title="Add item to this list"
+                on:click|stopPropagation={openAddItemModal}
+                disabled={!$isOnline} 
+            >
+                <span class="font-bold text-lg">+</span> 
+            </button>
+        {/if}
     </div>
 </div>
 

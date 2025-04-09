@@ -74,9 +74,17 @@ let getLatestEventByCoordSpy: MockInstance<typeof localDb.getLatestEventByCoord>
 let addOrUpdateEventSpy: MockInstance<typeof localDb.addOrUpdateEvent>;
 let signSpy: MockInstance<(signer?: NDKSigner | undefined) => Promise<string>>;
 
+// ---> NEW: Spies for kind fetching logic
+let getEventByIdSpy: MockInstance<typeof localDb.getEventById>;
+let fetchEventSpy: MockInstance<any>; // Mock ndkService.fetchEvent
+// --- END NEW ---
+
 // Mock the NDK instance and its methods if necessary
 const mockNdkInstance: Partial<NDK> = {
 	signer: undefined, // Will be set in beforeEach
+    // ---> NEW: Mock fetchEvent method
+    fetchEvent: vi.fn(),
+    // --- END NEW ---
 };
 
 // Mock NIP-07 signer
@@ -100,6 +108,8 @@ const currentUser = new MockNDKUser({ pubkey: testPubkey });
 // Use a valid, different 64-char hex pubkey
 const otherUserPubkey = 'b1e1b1e1b1e1b1e1b1e1b1e1b1e1b1e1b1e1b1e1b1e1b1e1b1e1b1e1b1e1b1e2'; 
 const testEventId = 'e4ac8cca7bf794e426fa21f065f55b150d1cf49839d01f7547a990a25268a603';
+const testReplaceableEventId = 'f5bda1f4a8f4ca6d3c8f8f8b2e1e1f1c1d1a1b1c1d1e1f1a1b1c1d1e1f2a3b4c';
+const testNonReplaceableEventId = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
 const testRelayHint = 'wss://relay.example.com';
 const testDTag = 'my-bookmarks';
 const testKind = 30003;
@@ -126,12 +136,71 @@ const otherUsersList: StoredEvent = {
 	id: 'other_event_id_456',
 };
 
+// --- NEW: Mock event data for kind fetching/validation --- 
+const mockCachedReplaceableEvent: StoredEvent = {
+    id: testReplaceableEventId,
+    kind: 0, // Kind 0 (metadata/profile - replaceable)
+    pubkey: 'some_pubkey',
+    created_at: 1678886400,
+    tags: [],
+    content: '',
+    sig: 'sig_rep',
+    published: true,
+};
+const mockNetworkNonReplaceableEvent = new NDKEvent(mockNdkInstance as NDK, {
+    id: testNonReplaceableEventId,
+    kind: 1, // Kind 1 (text note - non-replaceable)
+    pubkey: 'another_pubkey',
+    created_at: 1678886500,
+    tags: [],
+    content: '',
+    sig: 'sig_non_rep',
+} as NostrEvent);
+
+// --- NEW: Mock event data for kind fetching/validation --- 
+const mockIdKind0 = '0000000000000000000000000000000000000000000000000000000000000000';
+const mockIdKind3 = '3333333333333333333333333333333333333333333333333333333333333333';
+const mockIdKind10k = '1010101010101010101010101010101010101010101010101010101010101010';
+const mockIdKind30k = '3030303030303030303030303030303030303030303030303030303030303030';
+const mockIdKind1 = '1111111111111111111111111111111111111111111111111111111111111111';
+const mockIdKind4 = '4444444444444444444444444444444444444444444444444444444444444444';
+const mockIdUnknown = '9999999999999999999999999999999999999999999999999999999999999999';
+
+const mockCachedReplaceableKind0: StoredEvent = {
+    id: mockIdKind0, kind: 0, pubkey: 'pubkey0', created_at: 1700000000, tags: [], content: '', sig: 'sig0', published: true };
+const mockNetworkReplaceableKind3: NDKEvent = new NDKEvent(mockNdkInstance as NDK, {
+    id: mockIdKind3, kind: 3, pubkey: 'pubkey3', created_at: 1700000003, tags: [], content: '', sig: 'sig3' } as NostrEvent);
+const mockCachedReplaceableKind10k: StoredEvent = {
+    id: mockIdKind10k, kind: 10002, pubkey: 'pubkey10k', created_at: 1700000010, tags: [], content: '', sig: 'sig10k', published: true };
+const mockNetworkReplaceableKind30k: NDKEvent = new NDKEvent(mockNdkInstance as NDK, {
+    id: mockIdKind30k, kind: 30001, pubkey: 'pubkey30k', created_at: 1700000030, tags: [], content: '', sig: 'sig30k' } as NostrEvent);
+
+const mockCachedNonReplaceableKind1: StoredEvent = {
+    id: mockIdKind1, kind: 1, pubkey: 'pubkey1', created_at: 1700000001, tags: [], content: '', sig: 'sig1', published: true };
+const mockNetworkNonReplaceableKind4: NDKEvent = new NDKEvent(mockNdkInstance as NDK, {
+    id: mockIdKind4, kind: 4, pubkey: 'pubkey4', created_at: 1700000004, tags: [], content: '', sig: 'sig4' } as NostrEvent);
+const mockUnknownEventId = mockIdUnknown; // Use the valid hex ID here too
+// --- END NEW MOCK DATA ---
+
 // Test Input Data and Expected Tags
 const inputs = {
 	npub: nip19.npubEncode(testPubkey),
 	nprofile: nip19.nprofileEncode({ pubkey: testPubkey, relays: [testRelayHint] }),
 	note: nip19.noteEncode(testEventId),
 	nevent: nip19.neventEncode({ id: testEventId, relays: [testRelayHint], author: testPubkey }),
+    // ---> NEW: Inputs for kind testing
+    noteReplaceable: nip19.noteEncode(testReplaceableEventId),
+    neventNonReplaceable: nip19.neventEncode({ id: testNonReplaceableEventId, relays: [testRelayHint] }),
+    hexEventNonReplaceable: testNonReplaceableEventId,
+    // ---> NEW: Inputs for kind validation testing
+    noteKind0: nip19.noteEncode(mockIdKind0),
+    neventKind3: nip19.neventEncode({ id: mockIdKind3, relays: [testRelayHint] }),
+    hexKind10k: mockIdKind10k,
+    noteKind30k: nip19.noteEncode(mockIdKind30k),
+    neventKind1: nip19.neventEncode({ id: mockIdKind1, relays: [testRelayHint] }),
+    hexKind4: mockIdKind4,
+    noteUnknown: nip19.noteEncode(mockIdUnknown),
+    // --- END NEW INPUTS ---
 	naddrList: nip19.naddrEncode({ kind: 30001, pubkey: testPubkey, identifier: 'another-list', relays: [testRelayHint] }),
 	hexPubkey: testPubkey,
 	hexEventId: testEventId,
@@ -145,9 +214,22 @@ const expectedTags = {
 	nprofile: ['p', testPubkey],
 	note: ['e', testEventId],
 	nevent: ['e', testEventId, testRelayHint],
+    // ---> NEW: Expected for kind testing (tag added regardless for now)
+    noteReplaceable: ['e', testReplaceableEventId],
+    neventNonReplaceable: ['e', testNonReplaceableEventId, testRelayHint],
+    hexEventNonReplaceable: ['e', testNonReplaceableEventId],
+    // ---> NEW: Expected for kind validation testing
+    noteKind0: ['e', mockIdKind0],
+    neventKind3: ['e', mockIdKind3, testRelayHint],
+    hexKind10k: mockIdKind10k,
+    noteKind30k: nip19.noteEncode(mockIdKind30k),
+    neventKind1: ['e', mockIdKind1, testRelayHint],
+    hexKind4: ['e', mockIdKind4],
+    noteUnknown: ['e', mockIdUnknown],
+    // --- END NEW ---
 	naddrList: ['a', `30001:${testPubkey}:another-list`, testRelayHint],
 	// Assuming hex defaults to 'e'
-	hexPubkey: ['e', testPubkey], 
+	hexPubkey: ['e', testPubkey],
 	hexEventId: ['e', testEventId],
 	coordinateList: ['a', `30001:${testPubkey}:list-coord`],
 };
@@ -172,6 +254,11 @@ describe('listService', () => {
 		// Set up spies on the ACTUAL localDb methods
 		getLatestEventByCoordSpy = vi.spyOn(localDb, 'getLatestEventByCoord').mockResolvedValue(baseList);
 		addOrUpdateEventSpy = vi.spyOn(localDb, 'addOrUpdateEvent').mockResolvedValue(undefined);
+
+        // ---> NEW: Initialize spies for kind fetching
+        getEventByIdSpy = vi.spyOn(localDb, 'getEventById'); // Don't mock resolved value here, do it per test
+        fetchEventSpy = vi.spyOn(mockNdkInstance, 'fetchEvent'); // Spy on the mocked NDK instance's method
+        // --- END NEW ---
 
 		// Set up NDK Signer and spy on NDKEvent.sign
 		mockNdkInstance.signer = mockSigner;
@@ -198,8 +285,8 @@ describe('listService', () => {
 			['naddrList', inputs.naddrList, expectedTags.naddrList],
 			['hexEventId', inputs.hexEventId, expectedTags.hexEventId],
 			['coordinateList', inputs.coordinateList, expectedTags.coordinateList],
-			// Add hexPubkey test if ambiguity handling changes (e.g., to 'p')
-		])('should correctly add item for %s input', async (inputType, inputString, expectedTag) => {
+            // Kind fetch tests are separate
+		])('should correctly add item for %s input (non-kind-fetch cases)', async (inputType, inputString, expectedTag) => {
 			const result = await addItemToList(listCoordinateId, inputString);
 			
 			expect(result.success).toBe(true);
@@ -242,7 +329,7 @@ describe('listService', () => {
 		it('should return error for invalid input format', async () => {
 			const result = await addItemToList(listCoordinateId, inputs.invalid);
 			expect(result.success).toBe(false);
-			expect(result.error).toContain('Invalid input format');
+			expect(result.error).toContain('Invalid or unsupported input format');
 			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(testKind, testPubkey, testDTag);
 			expect(signSpy).not.toHaveBeenCalled();
 			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
@@ -349,6 +436,236 @@ describe('listService', () => {
 			expect(result.success).toBe(false);
 			expect(result.error).toBe('List ownership mismatch. Cannot modify.'); // Fix: Expect this specific error
 			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(testKind, testPubkey, testDTag);
+		});
+
+        // ---> NEW: Test suite for event kind fetching and validation <---
+        describe('event kind fetching and validation', () => {
+            it('should REJECT adding replaceable event found in local DB cache', async () => {
+                getEventByIdSpy.mockResolvedValue(mockCachedReplaceableEvent);
+                const input = inputs.noteReplaceable; // Input corresponds to mockCachedReplaceableEvent ID
+
+                // Clear fetch spy to ensure it's not called
+                fetchEventSpy.mockClear();
+
+                const result = await addItemToList(listCoordinateId, input);
+
+                // Assert failure and correct error
+                expect(result.success).toBe(false);
+                expect(result.error).toMatch(/Cannot add replaceable event kind 0 as a static event reference/);
+
+                // Verify lookup calls
+                expect(getEventByIdSpy).toHaveBeenCalledWith(testReplaceableEventId);
+                expect(fetchEventSpy).not.toHaveBeenCalled(); // Should not fetch from network
+                expect(addOrUpdateEventSpy).not.toHaveBeenCalled(); // Should not save
+            });
+
+            it('should fetch from network if event is not in local DB (and add if non-replaceable)', async () => {
+                getEventByIdSpy.mockResolvedValue(undefined);
+                fetchEventSpy.mockResolvedValue(mockNetworkNonReplaceableEvent);
+                const input = inputs.neventNonReplaceable;
+                const expectedTag = expectedTags.neventNonReplaceable;
+
+                const result = await addItemToList(listCoordinateId, input);
+
+                expect(result.success).toBe(true); // Should succeed as it's non-replaceable
+                expect(result.error).toBeUndefined();
+                expect(getEventByIdSpy).toHaveBeenCalledWith(testNonReplaceableEventId);
+                expect(fetchEventSpy).toHaveBeenCalledWith({ ids: [testNonReplaceableEventId] });
+                expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+                const savedEvent = addOrUpdateEventSpy.mock.calls[0][0] as StoredEvent;
+                expect(savedEvent.tags).toContainEqual(expectedTag); 
+            });
+
+             it('should add tag even if event kind cannot be found (cache miss, network miss)', async () => {
+                getEventByIdSpy.mockResolvedValue(undefined);
+                // Use the correct ID for this test case
+                const eventIdForUnknown = testNonReplaceableEventId; 
+                fetchEventSpy.mockResolvedValue(null); // Simulate event not found on network
+                // Use input corresponding to the ID
+                const input = inputs.hexEventNonReplaceable; 
+                const expectedTag = expectedTags.hexEventNonReplaceable;
+
+                const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+                const result = await addItemToList(listCoordinateId, input);
+
+                expect(result.success).toBe(true); // Should still succeed
+                expect(getEventByIdSpy).toHaveBeenCalledWith(eventIdForUnknown);
+                expect(fetchEventSpy).toHaveBeenCalledWith({ ids: [eventIdForUnknown] });
+                // Check only the warning that IS logged
+                expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Could not find event'));
+                expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+                const savedEvent = addOrUpdateEventSpy.mock.calls[0][0] as StoredEvent;
+                expect(savedEvent.tags).toContainEqual(expectedTag); 
+
+                consoleWarnSpy.mockRestore();
+            });
+
+            it('should add tag even if network fetch fails with an error', async () => {
+                getEventByIdSpy.mockResolvedValue(undefined);
+                const fetchError = new Error('Network timeout');
+                fetchEventSpy.mockRejectedValue(fetchError); // Simulate network error
+                const input = inputs.note; // Use a generic note input
+                const expectedTag = expectedTags.note;
+
+                // Spy on console.error
+                const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+                const result = await addItemToList(listCoordinateId, input);
+
+                expect(result.success).toBe(true);
+                expect(getEventByIdSpy).toHaveBeenCalledWith(testEventId);
+                expect(fetchEventSpy).toHaveBeenCalledWith({ ids: [testEventId] });
+                expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Error fetching event kind'), fetchError);
+                 expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+                const savedEvent = addOrUpdateEventSpy.mock.calls[0][0] as StoredEvent;
+                expect(savedEvent.tags).toContainEqual(expectedTag); // Still adds tag for now
+
+                consoleErrorSpy.mockRestore();
+            });
+
+            it('should not attempt to fetch kind for non-event inputs (npub)', async () => {
+                const input = inputs.npub;
+                const expectedTag = expectedTags.npub;
+
+                const result = await addItemToList(listCoordinateId, input);
+
+                expect(result.success).toBe(true);
+                expect(getEventByIdSpy).not.toHaveBeenCalled();
+                expect(fetchEventSpy).not.toHaveBeenCalled();
+                expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+                const savedEvent = addOrUpdateEventSpy.mock.calls[0][0] as StoredEvent;
+                expect(savedEvent.tags).toContainEqual(expectedTag);
+            });
+
+             it('should not attempt to fetch kind for non-event inputs (naddr)', async () => {
+                const input = inputs.naddrList;
+                const expectedTag = expectedTags.naddrList;
+
+                const result = await addItemToList(listCoordinateId, input);
+
+                expect(result.success).toBe(true);
+                expect(getEventByIdSpy).not.toHaveBeenCalled();
+                expect(fetchEventSpy).not.toHaveBeenCalled();
+                expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+                const savedEvent = addOrUpdateEventSpy.mock.calls[0][0] as StoredEvent;
+                expect(savedEvent.tags).toContainEqual(expectedTag);
+            });
+
+            // Test REJECTION of replaceable kinds (using it.each is fine here as output type is consistent)
+            it.each([
+                // [description, kind, input, mockData]
+                ['Kind 0 (cache)',      0, inputs.noteKind0, mockCachedReplaceableKind0],
+                ['Kind 3 (network)',    3, inputs.neventKind3, mockNetworkReplaceableKind3],
+                ['Kind 10002 (cache)',  10002, inputs.hexKind10k, mockCachedReplaceableKind10k],
+                ['Kind 30001 (network)',30001, inputs.noteKind30k, mockNetworkReplaceableKind30k],
+            ])(
+                'should REJECT adding replaceable event: %s',
+                async (_desc: string, kind: number, input: string, mockEventData: StoredEvent | NDKEvent) => {
+                    const eventId = mockEventData.id;
+                    if (mockEventData instanceof NDKEvent) { 
+                        getEventByIdSpy.mockResolvedValue(undefined);
+                        fetchEventSpy.mockResolvedValue(mockEventData);
+                    } else { 
+                        getEventByIdSpy.mockResolvedValue(mockEventData);
+                        fetchEventSpy.mockClear(); 
+                    }
+
+                    const result = await addItemToList(listCoordinateId, input);
+
+                    expect(result.success).toBe(false);
+                    expect(result.error).toMatch(/Cannot add replaceable event kind \d+ as a static event reference/);
+                    expect(result.error).toContain(`kind ${kind}`);
+                    expect(getEventByIdSpy).toHaveBeenCalledWith(eventId);
+                    if (mockEventData instanceof NDKEvent) {
+                        expect(fetchEventSpy).toHaveBeenCalledWith({ ids: [eventId] });
+                    } else {
+                        expect(fetchEventSpy).not.toHaveBeenCalled();
+                    }
+                    expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+                }
+            );
+
+            // --- Test ALLOWANCE of non-replaceable kinds (Split into individual tests) ---
+            it('should ALLOW adding non-replaceable event: Kind 1 (cache)', async () => {
+                const input = inputs.neventKind1;
+                const mockEventData = mockCachedNonReplaceableKind1;
+                const expectedTag = expectedTags.neventKind1;
+                const eventId = mockEventData.id;
+
+                getEventByIdSpy.mockResolvedValue(mockEventData);
+                fetchEventSpy.mockClear(); // Ensure network isn't called
+
+                const result = await addItemToList(listCoordinateId, input);
+
+                expect(result.success).toBe(true);
+                expect(result.error).toBeUndefined();
+                expect(getEventByIdSpy).toHaveBeenCalledWith(eventId);
+                expect(fetchEventSpy).not.toHaveBeenCalled();
+                expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+                const savedEvent = addOrUpdateEventSpy.mock.calls[0][0] as StoredEvent;
+                expect(savedEvent.tags).toContainEqual(expectedTag);
+            });
+
+            it('should ALLOW adding non-replaceable event: Kind 4 (network)', async () => {
+                const input = inputs.hexKind4;
+                const mockEventData = mockNetworkNonReplaceableKind4;
+                const expectedTag = expectedTags.hexKind4;
+                const eventId = mockEventData.id;
+
+                getEventByIdSpy.mockResolvedValue(undefined); // Cache miss
+                fetchEventSpy.mockResolvedValue(mockEventData); // Network hit
+
+                const result = await addItemToList(listCoordinateId, input);
+
+                expect(result.success).toBe(true);
+                expect(result.error).toBeUndefined();
+                expect(getEventByIdSpy).toHaveBeenCalledWith(eventId);
+                expect(fetchEventSpy).toHaveBeenCalledWith({ ids: [eventId] });
+                expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+                const savedEvent = addOrUpdateEventSpy.mock.calls[0][0] as StoredEvent;
+                expect(savedEvent.tags).toContainEqual(expectedTag);
+            });
+            // --- End split ALLOWANCE tests ---
+
+            // Test ALLOWANCE when kind is unknown
+            it('should ALLOW adding event if kind is unknown (fetch fails/not found)', async () => {
+                getEventByIdSpy.mockResolvedValue(undefined);
+                fetchEventSpy.mockResolvedValue(null);
+                const input = inputs.noteUnknown;
+                const expectedTag = expectedTags.noteUnknown;
+                const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+                const result = await addItemToList(listCoordinateId, input);
+
+                expect(result.success).toBe(true);
+                expect(result.error).toBeUndefined();
+                expect(getEventByIdSpy).toHaveBeenCalledWith(mockUnknownEventId);
+                expect(fetchEventSpy).toHaveBeenCalledWith({ ids: [mockUnknownEventId] });
+                expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Could not find event'));
+                expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+                const savedEvent = addOrUpdateEventSpy.mock.calls[0][0] as StoredEvent;
+                expect(savedEvent.tags).toContainEqual(expectedTag);
+
+                consoleWarnSpy.mockRestore();
+            });
+
+        });
+        // --- END: Revised Test suite for event kind fetching and validation ---
+
+		it('should return error if user is not logged in', async () => {
+			// Mock get(user) to return null
+			vi.mocked(get).mockImplementation((store) => {
+				if (store === user) {
+					return null;
+				}
+				return undefined;
+			});
+			// Pass string input
+			const result = await addItemToList(listCoordinateId, inputs.note);
+			expect(result.success).toBe(false);
+			expect(result.error).toBe('User not logged in');
+			// User check happens before DB query
 		});
 	});
 

@@ -1,5 +1,5 @@
 import { NDKEvent } from '@nostr-dev-kit/ndk';
-import { localDb, type StoredEvent } from '$lib/localDb';
+import { localDb, type StoredEvent, isReplaceableKind } from '$lib/localDb';
 import { nip19 } from 'nostr-tools'; // Import nip19 from nostr-tools
 import { ndkService } from '$lib/ndkService';
 import { user } from '$lib/userStore';
@@ -48,7 +48,7 @@ export async function addItemToList(
     const ndkInstance = ndkService.getNdkInstance(); // Get instance from service
     const signer = ndkService.getSigner(); // Get signer from service
     const trimmedInput = itemInput.trim();
-    console.log(`addItemToList called for list coordinate: ${listCoordinateId}, input: "${trimmedInput}"`);
+    console.log(`addItemToList called for list coordinate: ${listCoordinateId}, input: \"${trimmedInput}\"`);
 
     if (!currentUser?.pubkey) {
         return { success: false, error: 'User not logged in' };
@@ -63,14 +63,14 @@ export async function addItemToList(
         return { success: false, error: 'Input cannot be empty' };
     }
 
-    // Parse and validate coordinate ID
+    // Parse and validate list coordinate ID
     const parsedCoord = parseCoordinateId(listCoordinateId);
     if (!parsedCoord) {
         return { success: false, error: 'Invalid list coordinate ID format.' };
     }
     const { kind, pubkey, dTag } = parsedCoord;
 
-    // Validate that the list pubkey matches the current user
+    // Validate list ownership
     if (pubkey !== currentUser.pubkey) {
          return { success: false, error: 'Cannot modify a list belonging to another user.' };
     }
@@ -81,15 +81,20 @@ export async function addItemToList(
         if (!currentStoredEvent) {
             return { success: false, error: `List event with coordinate ${listCoordinateId} not found locally.` };
         }
-        // Double check pubkey just in case DB returns something unexpected (though it shouldn't)
+        // Double check pubkey
         if (currentStoredEvent.pubkey !== currentUser.pubkey) {
              console.error("DB returned event for coordinate but pubkey doesn't match current user!", { coord: listCoordinateId, eventPk: currentStoredEvent.pubkey, userPk: currentUser.pubkey });
             return { success: false, error: 'List ownership mismatch. Cannot modify.' };
         }
-        console.log('Found current list event by coordinate:', currentStoredEvent);
+         console.log('Found current list event by coordinate:', currentStoredEvent);
 
-        // --- Auto-detection logic --- 
+        // --- Auto-detection and Kind Fetching Logic ---
         let tagToAdd: string[] | null = null;
+        let eventKind: number | undefined = undefined;
+        let hexEventId: string | undefined = undefined;
+        let potentialRelayHint: string | undefined = undefined;
+        let potentialTagType: 'p' | 'e' | 'a' | undefined = undefined;
+
         try {
             const decoded = nip19.decode(trimmedInput);
             console.log('NIP-19 Decoded:', decoded);
@@ -97,22 +102,29 @@ export async function addItemToList(
             switch (decoded.type) {
                 case 'npub':
                     tagToAdd = ['p', decoded.data];
+                    potentialTagType = 'p';
                     break;
                 case 'nprofile':
                     tagToAdd = ['p', decoded.data.pubkey];
+                    potentialTagType = 'p';
                     break;
                 case 'naddr': {
-                    const { kind, pubkey, identifier: dTag, relays } = decoded.data;
-                    const coord = `${kind}:${pubkey}:${dTag}`;
+                    const { kind: naddrKind, pubkey: naddrPubkey, identifier: naddrDTag, relays } = decoded.data;
+                    const coord = `${naddrKind}:${naddrPubkey}:${naddrDTag}`;
                     tagToAdd = relays?.length ? ['a', coord, relays[0]] : ['a', coord];
+                    potentialTagType = 'a';
                     break;
                 }
                 case 'note':
-                    tagToAdd = ['e', decoded.data];
+                    hexEventId = decoded.data;
+                    potentialRelayHint = undefined;
+                    potentialTagType = 'e'; // Mark as potential 'e' tag
                     break;
                 case 'nevent': {
                     const { id, relays } = decoded.data;
-                    tagToAdd = relays?.length ? ['e', id, relays[0]] : ['e', id];
+                    hexEventId = id;
+                    potentialRelayHint = relays?.length ? relays[0] : undefined;
+                    potentialTagType = 'e'; // Mark as potential 'e' tag
                     break;
                 }
                 default:
@@ -121,40 +133,89 @@ export async function addItemToList(
         } catch (e) {
             console.log('NIP-19 decode failed, checking for hex/coordinate...');
             if (/^[a-f0-9]{64}$/i.test(trimmedInput)) {
-                console.log("Detected hex ID, assuming event ('e').");
-                tagToAdd = ['e', trimmedInput];
-            } 
+                console.log("Detected hex ID, potentially an event ('e').");
+                hexEventId = trimmedInput;
+                potentialRelayHint = undefined;
+                potentialTagType = 'e'; // Mark as potential 'e' tag
+            }
             else {
-                 const coordRegex = /^\d+:[a-f0-9]{64}:/i;
-                 if (coordRegex.test(trimmedInput)) {
+                 const coordRegex = /^(\d+):([a-f0-9]{64}):(.*)$/i;
+                 const coordMatch = trimmedInput.match(coordRegex);
+                 if (coordMatch) {
                      console.log("Detected coordinate format, assuming address ('a').");
-                     tagToAdd = ['a', trimmedInput]; 
+                     tagToAdd = ['a', trimmedInput];
+                     potentialTagType = 'a';
+                 } else {
+                    console.log("Input is not a valid NIP-19 string, hex ID, or coordinate.");
                  }
             }
         }
 
-        if (!tagToAdd) {
-            return { success: false, error: 'Invalid input format (expected npub, nprofile, naddr, note, nevent, hex ID, or kind:pubkey:dTag)' };
-        }
-        console.log('Determined tag to add:', tagToAdd);
-        // --- End Auto-detection ---
+        // --- Fetch event kind and perform validation if it's a potential 'e' tag ---
+        if (potentialTagType === 'e' && hexEventId) {
+            console.log(`Potential event ID detected: ${hexEventId}. Fetching kind...`);
+            try {
+                // 1. Check local cache
+                const cachedEvent = await localDb.getEventById(hexEventId);
+                if (cachedEvent) {
+                    eventKind = cachedEvent.kind;
+                    console.log(`Event kind ${eventKind} found in local cache for ${hexEventId}`);
+                } else {
+                    // 2. Fetch from network if not in cache
+                    console.log(`Event ${hexEventId} not in cache, fetching from network...`);
+                    const fetchedEvent = await ndkInstance.fetchEvent({ ids: [hexEventId] });
+                    if (fetchedEvent) {
+                        eventKind = fetchedEvent.kind;
+                        console.log(`Fetched event kind ${eventKind} from network for ${hexEventId}`);
+                        // Optional: Add fetched event to localDb
+                    } else {
+                        console.warn(`Could not find event ${hexEventId} locally or on network.`);
+                        eventKind = undefined;
+                    }
+                }
+            } catch (fetchError: any) {
+                console.error(`Error fetching event kind for ${hexEventId}:`, fetchError);
+                eventKind = undefined;
+            }
 
+            // ---> VALIDATION Check <----
+            if (eventKind !== undefined && isReplaceableKind(eventKind)) {
+                console.warn(`Attempted to add replaceable event kind ${eventKind} (${hexEventId}) as an 'e' tag.`);
+                return {
+                    success: false,
+                    error: `Cannot add replaceable event kind ${eventKind} as a static event reference. Consider adding via naddr if applicable.`
+                };
+            }
+            // ---> END VALIDATION Check <----
+
+            // If validation passed (or kind is unknown), prepare the 'e' tag
+            console.log(`Kind check passed (or kind unknown) for ${hexEventId}. Preparing 'e' tag.`);
+            tagToAdd = potentialRelayHint ? ['e', hexEventId, potentialRelayHint] : ['e', hexEventId];
+
+        }
+        // --- End Fetch and Validation ---
+
+        if (!tagToAdd) {
+             return { success: false, error: 'Invalid or unsupported input format (expected npub, nprofile, naddr, note, nevent, hex ID, or coordinate)' };
+        }
+        console.log('Final tag determined:', tagToAdd);
+
+        // --- Continue with creating the new event version ---
         const newEvent = new NDKEvent(ndkInstance);
-        newEvent.kind = currentStoredEvent.kind; // Use kind from fetched event
-        newEvent.pubkey = currentUser.pubkey; // Set pubkey explicitly
+        newEvent.kind = currentStoredEvent.kind;
+        newEvent.pubkey = currentUser.pubkey;
         newEvent.content = currentStoredEvent.content;
         newEvent.created_at = Math.floor(Date.now() / 1000);
 
-        // Filter existing tags and add the new one, preventing duplicates
         const existingTags = currentStoredEvent.tags.filter(tag => Array.isArray(tag) && tag.length >= 2);
-        const isDuplicate = existingTags.some(tag => 
-            tag[0] === tagToAdd[0] && 
+        const isDuplicate = existingTags.some(tag =>
+            tag[0] === tagToAdd[0] &&
             tag[1] === tagToAdd[1]
         );
 
         if (isDuplicate) {
             console.log("Item already exists in the list, not adding duplicate tag.");
-            return { success: true, newEventId: currentStoredEvent.id }; // Return current event ID
+            return { success: true, newEventId: currentStoredEvent.id };
         }
 
         const newTags = [...existingTags, tagToAdd];
@@ -177,7 +238,7 @@ export async function addItemToList(
             tags: newEvent.tags,
             content: newEvent.content,
             sig: newEvent.sig,
-            dTag: newEvent.kind >= 30000 && newEvent.kind < 40000 ? newEvent.tags.find(t => t[0] === 'd')?.[1] : undefined,
+            dTag: (newEvent.kind >= 30000 && newEvent.kind < 40000) ? newEvent.tags.find(t => t[0] === 'd')?.[1] : undefined,
             published: false
         };
 
@@ -189,7 +250,7 @@ export async function addItemToList(
 
     } catch (error: any) {
         console.error('Error in addItemToList:', error);
-        return { success: false, error: error.message || 'An unknown error occurred' };
+        return { success: false, error: error.message || 'An unknown error occurred while adding item' };
     }
 }
 

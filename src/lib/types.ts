@@ -11,4 +11,5 @@ export interface TreeNodeData {
     dTag?: string;    // Optional 'd' tag identifier
     // Add other NDKEvent properties if needed for display or logic later
     eventId: string; // The actual Nostr event ID of the list version being displayed
+    pubkey: string; // Author pubkey of the list event
 } 

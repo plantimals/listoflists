@@ -44,20 +44,17 @@ export function transformStoredEventToNode(event: StoredEvent): TreeNodeData {
             relayHint: t[2] // Capture relay hint if present
         }));
 
-    // Initialize children as an empty array. Hierarchy will be built later.
-    const children: TreeNodeData[] = [];
-
     // Construct and return the TreeNodeData object.
     return {
         id,
         kind,
         name,
         itemCount,
-        children,
+        children: [], // Initialized empty, populated by buildHierarchy
         items, // Add the extracted items
         dTag, // Include dTag if it exists
-        eventId: event.id // Add the actual event ID
-        // rawEvent: event // Removed to match TreeNodeData type
+        eventId: event.id,
+        pubkey: event.pubkey // <<< ADDED THIS LINE
     };
 }
 
