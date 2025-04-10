@@ -354,4 +354,135 @@ export async function removeItemFromList(
         console.error('Error in removeItemFromList:', error);
         return { success: false, error: error.message || 'An unknown error occurred' };
     }
+}
+
+/**
+ * Renames a list event identified by its coordinate ID.
+ * Creates a new version of the event with updated 'd' and 'title' tags,
+ * signs it, and saves it locally as unpublished.
+ * @param listCoordinateId The coordinate ID (kind:pubkey or kind:pubkey:dTag) of the list to rename.
+ * @param newName The desired new name for the list.
+ * @returns Promise<ServiceResult> indicating success or failure, including the new event ID on success.
+ */
+export async function renameList(
+    listCoordinateId: string,
+    newName: string
+): Promise<ServiceResult> {
+    // 1. Get Dependencies & Validate
+    const currentUser = get(user);
+    const ndkInstance = ndkService.getNdkInstance();
+    const signer = ndkService.getSigner();
+    const trimmedNewName = newName.trim();
+
+    console.log(`renameList called for coordinate: ${listCoordinateId} to name: \\"${trimmedNewName}\\"`);
+
+    if (!currentUser?.pubkey) {
+        return { success: false, error: 'User not logged in' };
+    }
+    if (!ndkInstance) {
+        return { success: false, error: 'NDK not initialized' };
+    }
+    if (!signer) {
+        return { success: false, error: 'Nostr signer not available (NIP-07? NIP-46?)' };
+    }
+    if (!trimmedNewName) {
+        return { success: false, error: 'New list name cannot be empty or just whitespace.' };
+    }
+
+    // 2. Parse & Validate Coordinate
+    const parsedCoord = parseCoordinateId(listCoordinateId);
+    if (!parsedCoord) {
+        return { success: false, error: 'Invalid list coordinate ID format.' };
+    }
+    const { kind, pubkey, dTag } = parsedCoord;
+
+    // 3. Check Initial Ownership
+    if (pubkey !== currentUser.pubkey) {
+        return { success: false, error: 'Cannot rename a list belonging to another user.' };
+    }
+    // Ensure the kind is appropriate for renaming (replaceable)
+     if (!isReplaceableKind(kind)) {
+         return { success: false, error: `Cannot rename event of kind ${kind} as it's not replaceable.` };
+     }
+
+    try {
+        // 4. Fetch Current Event
+        const currentStoredEvent = await localDb.getLatestEventByCoord(kind, pubkey, dTag);
+        if (!currentStoredEvent) {
+            return { success: false, error: `List event with coordinate ${listCoordinateId} not found locally.` };
+        }
+        console.log('Found current list event to rename:', currentStoredEvent);
+
+        // 5. Check Fetched Event Ownership (Safety Check)
+        if (currentStoredEvent.pubkey !== currentUser.pubkey) {
+            console.error("Ownership mismatch after fetching for rename", { coord: listCoordinateId, eventPk: currentStoredEvent.pubkey, userPk: currentUser.pubkey });
+            return { success: false, error: 'List ownership mismatch (DB error?). Cannot rename.' };
+        }
+
+        // 6. Create New Event Version
+        const newEvent = new NDKEvent(ndkInstance);
+        newEvent.kind = currentStoredEvent.kind;
+        newEvent.pubkey = currentUser.pubkey;
+        newEvent.content = currentStoredEvent.content; // Preserve content
+        newEvent.created_at = Math.floor(Date.now() / 1000); // New timestamp
+
+        // 7. Tag Handling
+        const tagsToKeep = currentStoredEvent.tags.filter(tag => {
+            // Keep tags that are not 'd' or 'title'
+            return !Array.isArray(tag) || (tag[0] !== 'd' && tag[0] !== 'title');
+        });
+
+        // Add new 'd' and 'title' tags
+        const newTags = [
+            ...tagsToKeep,
+            ['d', trimmedNewName]
+            // Only add title tag if name is not empty, standard practice
+            // ...(trimmedNewName ? [['title', trimmedNewName]] : [])
+            // Actually, let's always add title mirroring d for consistency
+             , ['title', trimmedNewName]
+        ];
+        newEvent.tags = newTags;
+        console.log('New tags for renamed list:', newTags);
+
+        // 8. Sign New Event
+        console.log('Attempting to sign the renamed list event version...');
+        await newEvent.sign(signer);
+        console.log('Renamed event signed successfully. ID:', newEvent.id, 'Sig:', newEvent.sig);
+
+        if (!newEvent.sig || !newEvent.id) {
+            return { success: false, error: 'Failed to sign the renamed list event.' };
+        }
+
+        // 9. Prepare for Local Storage
+        const newStoredEvent: StoredEvent = {
+            id: newEvent.id,
+            kind: newEvent.kind,
+            pubkey: newEvent.pubkey,
+            created_at: newEvent.created_at,
+            tags: newEvent.tags,
+            content: newEvent.content,
+            sig: newEvent.sig,
+            // The dTag MUST be updated to the new name for parameterized kinds
+            dTag: isReplaceableKind(newEvent.kind) ? trimmedNewName : undefined,
+            published: false // Mark as unpublished locally
+        };
+         console.log("Prepared StoredEvent:", newStoredEvent);
+
+        // 10. Save Locally
+        console.log('Saving renamed event version to local DB:', newStoredEvent);
+        await localDb.addOrUpdateEvent(newStoredEvent);
+        console.log('Renamed list event version saved locally.');
+
+        // 11. Return Success
+        return { success: true, newEventId: newStoredEvent.id };
+
+    } catch (error: any) {
+        console.error(`Error in renameList for ${listCoordinateId}:`, error);
+        const errorMessage = error.message || 'An unexpected error occurred while renaming the list.';
+        // Check if the error is from the DB save operation
+        if (error instanceof Error && error.name === 'DexieError') { // Example check, adjust if needed
+             return { success: false, error: `Failed to save renamed list locally: ${errorMessage}` };
+        }
+        return { success: false, error: errorMessage };
+    }
 } 

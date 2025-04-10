@@ -3,7 +3,7 @@ import NDK, { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
 import type { NDKSigner, NostrEvent } from '@nostr-dev-kit/ndk';
 import type { NDKUser } from '@nostr-dev-kit/ndk';
 import { localDb, type StoredEvent } from '$lib/localDb';
-import { addItemToList, removeItemFromList, type Item } from '$lib/listService';
+import { addItemToList, removeItemFromList, renameList, type Item } from '$lib/listService';
 import { nip19 } from 'nostr-tools';
 
 // Mock NDK
@@ -792,4 +792,168 @@ describe('listService', () => {
 			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce(); // Attempted to save
 		});
 	});
-});
+
+	// +++ NEW TEST SUITE FOR renameList +++
+	describe('renameList', () => {
+		const newListName = 'My Updated Bookmarks';
+		const listCoord = `30001:${testPubkey}:old-name`; // Use a specific coord for rename tests
+		const originalList: StoredEvent = {
+			id: 'original_event_id_rename',
+			kind: 30001,
+			pubkey: testPubkey,
+			created_at: Math.floor(Date.now() / 1000) - 2000,
+			tags: [
+				['d', 'old-name'],
+				['title', 'Old Name'],
+				['p', 'pubkey1'],
+				['e', 'eventid1'],
+				['otherTag', 'value'],
+			],
+			content: 'Original list content',
+			sig: 'original-sig-rename',
+			dTag: 'old-name',
+			published: true,
+		};
+
+		beforeEach(() => {
+			// Default successful mocks for this suite
+			getLatestEventByCoordSpy.mockResolvedValue(originalList);
+			addOrUpdateEventSpy.mockResolvedValue(undefined); // Assuming void return on success
+			// signSpy is already mocked in the parent beforeEach to add id/sig
+		});
+
+		it('should successfully rename a list', async () => {
+			const result = await renameList(listCoord, newListName);
+
+			expect(result.success).toBe(true);
+			expect(result.newEventId).toBeDefined();
+			expect(result.error).toBeUndefined();
+
+			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(30001, testPubkey, 'old-name');
+			expect(signSpy).toHaveBeenCalledOnce();
+			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+
+			const savedEvent = addOrUpdateEventSpy.mock.calls[0][0] as StoredEvent;
+			expect(savedEvent.id).toBe(result.newEventId);
+			expect(savedEvent.sig).toBeDefined();
+			expect(savedEvent.pubkey).toBe(testPubkey);
+			expect(savedEvent.kind).toBe(30001);
+			expect(savedEvent.content).toBe(originalList.content); // Content preserved
+			expect(savedEvent.created_at).toBeGreaterThan(originalList.created_at);
+			expect(savedEvent.published).toBe(false); // Crucial: unpublished
+			expect(savedEvent.dTag).toBe(newListName); // Crucial: dTag updated
+
+			// Verify tags
+			const dTag = savedEvent.tags.find(t => t[0] === 'd');
+			const titleTag = savedEvent.tags.find(t => t[0] === 'title');
+			expect(dTag).toEqual(['d', newListName]);
+			expect(titleTag).toEqual(['title', newListName]);
+			expect(savedEvent.tags).toContainEqual(['p', 'pubkey1']);
+			expect(savedEvent.tags).toContainEqual(['e', 'eventid1']);
+			expect(savedEvent.tags).toContainEqual(['otherTag', 'value']);
+			expect(savedEvent.tags.length).toBe(5); // old d/title removed, new d/title added, 3 others kept
+		});
+
+		// --- Error Cases ---
+		it('should return error if user is not logged in', async () => {
+			vi.mocked(get).mockReturnValue(null); // Simulate no user
+			const result = await renameList(listCoord, newListName);
+			expect(result).toEqual({ success: false, error: 'User not logged in' });
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		});
+
+		it('should return error if NDK is not initialized', async () => {
+			// Use null as any to bypass strict type check for this specific error case
+			vi.mocked(ndkService.getNdkInstance).mockReturnValue(null as any);
+			const result = await renameList(listCoord, newListName);
+			expect(result).toEqual({ success: false, error: 'NDK not initialized' });
+			 expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		});
+
+		it('should return error if signer is not available', async () => {
+			// Use undefined instead of null for type compatibility
+			vi.mocked(ndkService.getSigner).mockReturnValue(undefined);
+			const result = await renameList(listCoord, newListName);
+			expect(result).toEqual({ success: false, error: 'Nostr signer not available (NIP-07? NIP-46?)' });
+			 expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		});
+
+		it('should return error if new name is empty', async () => {
+			const result = await renameList(listCoord, '  ');
+			expect(result).toEqual({ success: false, error: 'New list name cannot be empty or just whitespace.' });
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		});
+
+		it('should return error for invalid list coordinate format', async () => {
+			const result = await renameList('invalid-coord', newListName);
+			expect(result).toEqual({ success: false, error: 'Invalid list coordinate ID format.' });
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		});
+
+		it('should return error if trying to rename another user\'s list (initial check)', async () => {
+			const otherUserCoord = `30001:${otherUserPubkey}:some-list`;
+			const result = await renameList(otherUserCoord, newListName);
+			expect(result).toEqual({ success: false, error: 'Cannot rename a list belonging to another user.' });
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		});
+
+		 it('should return error if list kind is not replaceable', async () => {
+			 const nonReplaceableCoord = `1:${testPubkey}:not-a-list`; // Kind 1
+			 // Mock parseCoordinateId behaviour implicitly by calling with coord
+			 const result = await renameList(nonReplaceableCoord, newListName);
+			 expect(result).toEqual({ success: false, error: `Cannot rename event of kind 1 as it's not replaceable.` });
+			 expect(getLatestEventByCoordSpy).not.toHaveBeenCalled();
+			 expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		 });
+
+		it('should return error if list event is not found locally', async () => {
+			getLatestEventByCoordSpy.mockResolvedValue(undefined);
+			const result = await renameList(listCoord, newListName);
+			expect(result).toEqual({ success: false, error: `List event with coordinate ${listCoord} not found locally.` });
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		});
+
+		it('should return error on fetched ownership mismatch (safety check)', async () => {
+			const mismatchedList = { ...originalList, pubkey: otherUserPubkey };
+			getLatestEventByCoordSpy.mockResolvedValue(mismatchedList);
+			const result = await renameList(listCoord, newListName);
+			expect(result).toEqual({ success: false, error: 'List ownership mismatch (DB error?). Cannot rename.' });
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		});
+
+		it('should return error if signing fails (no id/sig)', async () => {
+			signSpy.mockImplementation(async function(this: NDKEvent) {
+				// Simulate signing failure by not setting id/sig
+				this.id = undefined as any;
+				this.sig = undefined as any;
+				return ''; // Or throw?
+			});
+			const result = await renameList(listCoord, newListName);
+			expect(result).toEqual({ success: false, error: 'Failed to sign the renamed list event.' });
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		});
+
+		 it('should return error if signing throws an error', async () => {
+			 const signError = new Error('Signer exploded');
+			 signSpy.mockRejectedValue(signError);
+			 const result = await renameList(listCoord, newListName);
+			 expect(result).toEqual({ success: false, error: 'Signer exploded' });
+			 expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		 });
+
+		it('should return error if saving to local DB fails', async () => {
+			const dbError = new Error('DB write failed');
+			addOrUpdateEventSpy.mockRejectedValue(dbError);
+			const result = await renameList(listCoord, newListName);
+
+			expect(result.success).toBe(false);
+			// Expect the actual error message when the DexieError check doesn't match
+			expect(result.error).toBe(dbError.message); // Changed from toContain to toBe
+
+			// Verify save was attempted
+			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+		});
+	});
+	// +++ END renameList SUITE +++
+
+}); // End describe('listService')
