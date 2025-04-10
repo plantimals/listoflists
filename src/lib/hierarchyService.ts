@@ -35,11 +35,11 @@ export function transformStoredEventToNode(event: StoredEvent): TreeNodeData {
     // Count the number of items ('p', 'e', 'a' tags) in the list.
     const itemCount = event.tags.filter(t => ['p', 'e', 'a'].includes(t[0])).length;
 
-    // Extract 'p' and 'e' tags specifically for the items list
-    const items: Array<{ type: 'p' | 'e'; value: string; relayHint?: string }> = event.tags
-        .filter(t => t[0] === 'p' || t[0] === 'e')
+    // Extract 'p', 'e', and 'a' tags specifically for the items list
+    const items: Array<{ type: 'p' | 'e' | 'a'; value: string; relayHint?: string }> = event.tags
+        .filter(t => t[0] === 'p' || t[0] === 'e' || t[0] === 'a') // Include 'a' tags here too if needed for display/actions
         .map(t => ({
-            type: t[0] as 'p' | 'e', // Cast type
+            type: t[0] as 'p' | 'e' | 'a', // Cast type
             value: t[1],
             relayHint: t[2] // Capture relay hint if present
         }));
@@ -54,12 +54,13 @@ export function transformStoredEventToNode(event: StoredEvent): TreeNodeData {
         items, // Add the extracted items
         dTag, // Include dTag if it exists
         eventId: event.id,
-        pubkey: event.pubkey // <<< ADDED THIS LINE
+        pubkey: event.pubkey
     };
 }
 
 /**
  * Builds a hierarchical structure of TreeNodeData from a flat list of root StoredEvents.
+ * Filters for the latest versions of replaceable events before processing.
  * It recursively looks up child lists referenced by 'a' tags in the local database.
  *
  * @param rootListEvents An array of StoredEvents representing the top-level lists from the local DB.
@@ -70,6 +71,37 @@ export async function buildHierarchy(
     rootListEvents: StoredEvent[],
     maxDepth: number = 5
 ): Promise<TreeNodeData[]> {
+
+    // --- START: Filter for latest replaceable events --- 
+    const latestEventsMap = new Map<string, StoredEvent>();
+
+    for (const event of rootListEvents) {
+        let eventKey: string;
+        const kind = event.kind;
+
+        if (isParameterizedReplaceable(kind)) {
+            const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+            if (dTag === undefined) { // Treat replaceable without dTag like non-replaceable for keying
+                eventKey = event.id;
+            } else {
+                 eventKey = `${kind}:${event.pubkey}:${dTag}`; // NIP-51 coordinate
+            }
+        } else if (kind === 0 || (kind >= 10000 && kind < 20000)) { // NIP-01 replaceable
+             eventKey = `${kind}:${event.pubkey}`; // NIP-01 coordinate
+        } else { // Non-replaceable
+            eventKey = event.id; // Use event ID itself as key
+        }
+
+        const existingEvent = latestEventsMap.get(eventKey);
+        if (!existingEvent || event.created_at > existingEvent.created_at) {
+            latestEventsMap.set(eventKey, event);
+        }
+    }
+
+    const filteredRootEvents = Array.from(latestEventsMap.values());
+    console.log(`buildHierarchy: Filtered ${rootListEvents.length} events down to ${filteredRootEvents.length} latest versions.`);
+    // --- END: Filter for latest replaceable events ---
+
     // nodeMap stores fully processed nodes, keyed by their stable ID (a-tag coord or event id)
     const nodeMap = new Map<string, TreeNodeData>();
     // processing tracks IDs currently being processed in the *current* recursion path to detect cycles
@@ -84,6 +116,10 @@ export async function buildHierarchy(
         const dTag = isParameterizedReplaceable(kind)
             ? event.tags.find(t => t[0] === 'd')?.[1]
             : undefined;
+        // Node ID MUST align with the key used in the filtering step above
+        // For parameterized replaceable with a dTag, use the coordinate.
+        // For other replaceable (or parameterized without dTag), use kind:pubkey ? No, use event.id here for consistency?
+        // Let's stick to the ID definition used in transformStoredEventToNode for map keys.
         const nodeId = dTag ? `${kind}:${event.pubkey}:${dTag}` : event.id;
 
         // 1. Check depth limit
@@ -138,13 +174,16 @@ export async function buildHierarchy(
 
             try {
                 // Fetch the specific child list event *from the local database*
-                const childEvent = await localDb.getLatestEventByCoord(kind, pubkey, dTagChild); // Use optional dTag
+                 // IMPORTANT: Fetch the *latest* version of the child from the DB
+                const childEvent = await localDb.getLatestEventByCoord(kind, pubkey, dTagChild);
 
                 if (childEvent) {
                     // Recursively process the fetched child event
                     return await processEvent(childEvent, currentDepth + 1);
                 } else {
                     console.log(`Child list event not found locally for coordinate: ${coord}`);
+                    // Optionally create a placeholder node for unfound lists?
+                    // For now, just return null.
                     return null;
                 }
             } catch (error) {
@@ -168,8 +207,8 @@ export async function buildHierarchy(
         return node;
     }
 
-    // Process all root-level events concurrently
-    const hierarchyPromises = rootListEvents.map(rootEvent => processEvent(rootEvent, 0));
+    // Process all FILTERED root-level events concurrently
+    const hierarchyPromises = filteredRootEvents.map(rootEvent => processEvent(rootEvent, 0));
     const hierarchyNodes = await Promise.all(hierarchyPromises);
 
     // Filter out any null results

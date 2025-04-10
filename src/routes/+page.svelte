@@ -19,6 +19,7 @@
   import { writable } from 'svelte/store';
   import { nip19 } from 'nostr-tools';
   import AddItemModal from '$lib/components/AddItemModal.svelte'; // Import the Add Item modal
+  import RenameListModal from '$lib/components/RenameListModal.svelte'; // <-- Import RenameListModal
   import { syncService } from '$lib/syncService'; // <-- IMPORT syncService
 
   let isLoadingProfile: boolean = false;
@@ -34,6 +35,11 @@
   let modalTargetListId: string | null = null;
   let modalTargetListName: string = '';
   let addItemModalInstance: AddItemModal; // Instance binding for AddItemModal
+
+  // +++ Rename List Modal State +++
+  let renameModalTargetListId: string | null = null;
+  let renameModalTargetListName: string = '';
+  // No instance binding needed if using direct DOM manipulation via ID
 
   let isLoading = writable(true); // Store for loading state
   let error: string | null = null; // Store for error messages
@@ -458,6 +464,20 @@
       }
   }
 
+  // +++ NEW: Function to handle opening the Rename List modal +++
+  function handleOpenRenameModal(event: CustomEvent<{ listId: string; listName: string }>) {
+      console.log("page.svelte: Received openrenamemodal event", event.detail);
+      renameModalTargetListId = event.detail.listId;
+      renameModalTargetListName = event.detail.listName;
+      const modal = document.getElementById('rename_list_modal') as HTMLDialogElement;
+      if (modal) {
+          console.log("Showing rename_list_modal");
+          modal.showModal();
+      } else {
+          console.error("Could not find rename_list_modal element.");
+      }
+  }
+
   onMount(() => {
     // Initial load
     const currentPubkey = get(user)?.pubkey;
@@ -493,6 +513,9 @@
         targetListId={modalTargetListId}
         targetListName={modalTargetListName}
         on:itemadded={handleListChanged} />
+
+    <!-- Rename List Modal Instance -->
+    <RenameListModal bind:currentListId={renameModalTargetListId} bind:currentListName={renameModalTargetListName} />
 
     <!-- Logged In State - Using DaisyUI -->
     <p class="mb-4 text-sm text-base-content/80">Logged In as: <code class="break-all font-mono bg-base-200 px-1 rounded">{$user.npub}</code></p>
@@ -558,7 +581,7 @@
              {@const logHierarchy = console.log('TEMPLATE RENDERING: Hierarchy block')}
             <div class="mt-4 space-y-2 overflow-auto" style="max-height: 70vh;">
                 {#each $listHierarchy as rootNode (rootNode.id)}
-                    <TreeNode node={rootNode} on:listchanged={handleListChanged} on:openadditem={handleOpenAddItem} />
+                    <TreeNode node={rootNode} on:listchanged={handleListChanged} on:openadditem={handleOpenAddItem} on:openrenamemodal={handleOpenRenameModal} />
                 {/each}
             </div>
         {:else} <!-- Only show 'no lists' if *not* loading -->

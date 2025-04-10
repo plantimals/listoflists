@@ -15,8 +15,8 @@
     import { NDKEvent } from '@nostr-dev-kit/ndk';
     import { nip19 } from 'nostr-tools'; // Import nip19
     import { isOnline } from '$lib/networkStatusStore'; // <-- Ensure isOnline is imported
-    // --- REMOVING ICON IMPORT FOR NOW ---
-    // import { PlusIcon } from 'svelte-hero-icons'; 
+    // Import Icon component and the specific icon definition
+    import { Icon, PencilSquare } from 'svelte-hero-icons';
 
     export let node: TreeNodeData; // Corrected type annotation
     export let level: number = 0;
@@ -136,6 +136,19 @@
         });
     }
 
+    // Function to dispatch event for opening the rename modal
+    function openRenameModal() {
+        if (!node.id || !node.name) {
+            console.error("Cannot dispatch openrenamemodal: Node ID or Name is missing.");
+            return;
+        }
+        console.log(`%cTreeNode: Dispatching openrenamemodal with listId: '${node.id}', listName: '${node.name}'`, 'color: orange;', node);
+        dispatch('openrenamemodal', {
+            listId: node.id, // Use node.id which should be the coordinate
+            listName: node.name
+        });
+    }
+
     // Function to handle the event dispatched by the modal - Removed
     // function handleItemAdded() {
     //     console.log('TreeNode: Item added event received from modal. Triggering listchanged.');
@@ -250,8 +263,21 @@
                 on:click|stopPropagation={openAddItemModal}
                 disabled={!$isOnline} 
             >
-                <span class="font-bold text-lg">+</span> 
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                    <path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z" />
+                </svg>
             </button>
+            <!-- +++ NEW RENAME BUTTON +++ -->
+            {#if $isOnline} <!-- Rename only available when online for now -->
+                <button
+                    class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-primary"
+                    title="Rename this list"
+                    on:click|stopPropagation={openRenameModal}
+                >
+                    <!-- Use Icon component with src prop -->
+                    <Icon src={PencilSquare} class="w-4 h-4" />
+                </button>
+            {/if}
         {/if}
     </div>
 </div>
