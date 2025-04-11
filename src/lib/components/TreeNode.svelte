@@ -8,6 +8,7 @@
     import { user } from '$lib/userStore';
     import { refreshTrigger } from '$lib/refreshStore';
     import { addItemToList, removeItemFromList } from '$lib/listService'; // Removed ListServiceDependencies import
+    import * as listService from '$lib/listService'; // Import listService namespace
     // import AddItemModal from './AddItemModal.svelte'; // Import the modal - Removed
     import { createEventDispatcher } from 'svelte'; // Import dispatcher
     import { localDb, type StoredEvent } from '$lib/localDb';
@@ -16,7 +17,7 @@
     import { nip19 } from 'nostr-tools'; // Import nip19
     import { isOnline } from '$lib/networkStatusStore'; // <-- Ensure isOnline is imported
     // Import Icon component and the specific icon definition
-    import { Icon, PencilSquare } from 'svelte-hero-icons';
+    import { Icon, PencilSquare, Trash } from 'svelte-hero-icons';
 
     export let node: TreeNodeData; // Corrected type annotation
     export let level: number = 0;
@@ -25,6 +26,7 @@
     let isAdding: boolean = false;
     let isRemovingItemId: string | null = null; // Store which item is being removed
     let errorMessage: string | null = null; // Declare errorMessage
+    let isDeleting: boolean = false; // Add loading state for delete
 
     // State for Add Item Modal context - Removed
     // let addItemTargetListId: string | null = null;
@@ -202,6 +204,41 @@
         }
     }
 
+    // Function to handle deleting the current list node
+    async function handleDeleteList() {
+        if (!node.id) {
+            console.error("Cannot delete list: Node ID is missing.");
+            errorMessage = "Cannot delete list: List details are missing."; // Show error in UI
+            return;
+        }
+
+        if (!window.confirm(`Are you sure you want to delete the list \"${node.name}\"? This action cannot be undone.`)) {
+            return;
+        }
+
+        isDeleting = true; // Start loading indicator
+        errorMessage = null; // Clear previous errors
+
+        try {
+            console.log(`Calling listService.deleteList for coordinate: ${node.id}`);
+            const result = await listService.deleteList(node.id);
+
+            if (!result.success) {
+                console.error(`Failed to delete list ${node.id}:`, result.error);
+                errorMessage = result.error || 'Failed to delete list.';
+            } else {
+                console.log(`Successfully initiated deletion for list ${node.id}`);
+                // The refreshTrigger in listService will update the main view
+                // Optionally, provide success feedback here if needed, though removal is the main feedback
+            }
+        } catch (error: any) {
+            console.error("Unexpected error calling listService.deleteList:", error);
+            errorMessage = "An unexpected error occurred during deletion.";
+        } finally {
+            isDeleting = false; // Stop loading indicator
+        }
+    }
+
     // No other script logic needed for this step
 </script>
 
@@ -257,27 +294,40 @@
 
         <!-- Add Button -->
         {#if node.pubkey === $user?.pubkey}
-            <button
-                class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-accent disabled:text-base-content/30"
-                title="Add item to this list"
-                on:click|stopPropagation={openAddItemModal}
-                disabled={!$isOnline} 
-            >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
-                    <path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z" />
-                </svg>
-            </button>
-            <!-- +++ NEW RENAME BUTTON +++ -->
-            {#if $isOnline} <!-- Rename only available when online for now -->
+            <!-- Action Buttons for Owner -->
+            <div class="flex items-center space-x-1">
+                <!-- Add Item Button -->
                 <button
-                    class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-primary"
+                    class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-accent disabled:text-base-content/30"
+                    title="Add item to this list"
+                    on:click|stopPropagation={openAddItemModal}
+                    disabled={!$isOnline}
+                >
+                    +
+                </button>
+                <!-- Rename Button -->
+                <button
+                    class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-warning disabled:text-base-content/30"
                     title="Rename this list"
                     on:click|stopPropagation={openRenameModal}
+                    disabled={!$isOnline}
                 >
-                    <!-- Use Icon component with src prop -->
                     <Icon src={PencilSquare} class="w-4 h-4" />
                 </button>
-            {/if}
+                <!-- Delete Button -->
+                 <button
+                     class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-error disabled:text-base-content/30"
+                     title="Delete this list"
+                     on:click|stopPropagation={handleDeleteList}
+                     disabled={!$isOnline || isDeleting}
+                 >
+                     {#if isDeleting}
+                         <span class="loading loading-spinner loading-xs"></span>
+                     {:else}
+                         <Icon src={Trash} class="w-4 h-4" />
+                     {/if}
+                 </button>
+            </div>
         {/if}
     </div>
 </div>

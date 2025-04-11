@@ -1,9 +1,10 @@
-import { NDKEvent } from '@nostr-dev-kit/ndk';
+import { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
 import { localDb, type StoredEvent, isReplaceableKind } from '$lib/localDb';
 import { nip19 } from 'nostr-tools'; // Import nip19 from nostr-tools
 import { ndkService } from '$lib/ndkService';
 import { user } from '$lib/userStore';
 import { get } from 'svelte/store';
+import { refreshTrigger } from '$lib/refreshStore'; // Import refreshTrigger
 
 // Interfaces (Define Item here and export it)
 export interface Item {
@@ -491,4 +492,117 @@ export async function renameList(
         }
         return { success: false, error: errorMessage };
     }
-} 
+}
+
+/**
+ * Deletes a list by publishing a NIP-09 deletion event and removing it from the local database.
+ * The NIP-09 publication is best effort.
+ * @param listCoordinateId The coordinate ID (kind:pubkey:dTag) of the list to delete.
+ * @returns Promise<ServiceResult> indicating success or failure.
+ */
+export async function deleteList(listCoordinateId: string): Promise<ServiceResult> {
+    const currentUser = get(user);
+    const ndkInstance = ndkService.getNdkInstance();
+    const signer = ndkService.getSigner();
+    console.log(`deleteList called for coordinate: ${listCoordinateId}`);
+
+    if (!currentUser?.pubkey) {
+        return { success: false, error: 'User not logged in' };
+    }
+    if (!ndkInstance) {
+        return { success: false, error: 'NDK not initialized' };
+    }
+    if (!signer) {
+        return { success: false, error: 'Nostr signer not available' };
+    }
+
+    // Parse and validate list coordinate ID
+    const parsedCoord = parseCoordinateId(listCoordinateId);
+    if (!parsedCoord) {
+        return { success: false, error: 'Invalid list coordinate ID format.' };
+    }
+    const { kind, pubkey, dTag } = parsedCoord;
+
+    // Validate list ownership
+    if (pubkey !== currentUser.pubkey) {
+        return { success: false, error: 'Cannot delete a list belonging to another user.' };
+    }
+
+    // Specifically check for replaceable kinds, especially parameterized ones
+    if (!isReplaceableKind(kind) || (kind >= 30000 && kind < 40000 && !dTag)) {
+        return { success: false, error: 'Deletion only supported for valid replaceable list coordinates (e.g., 30001:pubkey:dTag).' };
+    }
+
+    try {
+        // Fetch the latest version using the coordinate to get its actual event ID
+        const currentStoredEvent = await localDb.getLatestEventByCoord(kind, pubkey, dTag);
+        if (!currentStoredEvent) {
+            console.warn(`List event with coordinate ${listCoordinateId} not found locally. Cannot publish NIP-09, proceeding with potential local removal if ID is known elsewhere.`);
+            // If we don't have the event locally, we can't publish NIP-09, nor can we reliably delete it.
+            // In a future enhancement, we might try fetching it first.
+            return { success: false, error: `List event ${listCoordinateId} not found locally.` };
+        }
+        const originalEventId = currentStoredEvent.id;
+        console.log(`Found list event to delete locally. Event ID: ${originalEventId}`);
+
+        // Create NIP-09 (kind:5) Event
+        const deletionEvent = new NDKEvent(ndkInstance);
+        deletionEvent.kind = NDKKind.EventDeletion; // Use NDKKind enum or 5
+        deletionEvent.pubkey = currentUser.pubkey;
+        deletionEvent.created_at = Math.floor(Date.now() / 1000);
+        deletionEvent.tags = [
+            ['e', originalEventId] // Tag the event ID being deleted
+            // Optionally add ['k', String(kind)] if needed for client interpretation
+        ];
+        deletionEvent.content = `Deleting list ${dTag || 'with coordinate'} ${listCoordinateId}`; // Optional reason
+
+        try {
+            console.log('Signing NIP-09 deletion event...');
+            await deletionEvent.sign(signer);
+            if (!deletionEvent.sig || !deletionEvent.id) {
+                throw new Error('Signing failed: Signature or ID is missing after sign attempt.');
+            }
+            console.log(`NIP-09 event signed: ${deletionEvent.id}`);
+
+            // Attempt to Publish NIP-09 Event (Best Effort)
+            try {
+                console.log(`Attempting to publish NIP-09 deletion event ${deletionEvent.id} for original event ${originalEventId}`);
+                const publishedRelays = await ndkService.publish(deletionEvent);
+                if (publishedRelays.size > 0) {
+                    console.log(`Published kind:5 deletion for ${originalEventId} to ${publishedRelays.size} relays.`);
+                } else {
+                    console.warn(`Kind:5 deletion event ${deletionEvent.id} was not published to any relays (may still be processed if relays fetch it).`);
+                }
+            } catch (publishError: any) {
+                console.error(`Failed to publish kind:5 deletion event ${deletionEvent.id} for ${originalEventId}:`, publishError);
+                // Do not return failure here, proceed with local deletion
+            }
+        } catch (signError: any) {
+            console.error('Failed to sign NIP-09 deletion event:', signError);
+            // Do not return failure here, proceed with local deletion but log the error
+        }
+
+        // Delete Original List Event Locally (Proceed regardless of NIP-09 outcome)
+        try {
+            console.log(`Attempting to delete original list event ${originalEventId} from local DB.`);
+            await localDb.deleteEventById(originalEventId);
+            console.log(`Successfully deleted list event ${originalEventId} from local DB.`);
+            refreshTrigger.update(n => n + 1); // Trigger UI refresh
+            return { success: true }; // Local deletion successful
+        } catch (localDeleteError: any) {
+            console.error(`CRITICAL: Failed to remove list event ${originalEventId} from local database after NIP-09 attempt:`, localDeleteError);
+            return { success: false, error: 'Failed to remove list from local database.' };
+        }
+
+    } catch (error: any) {
+        console.error(`Unexpected error during deleteList for ${listCoordinateId}:`, error);
+        return { success: false, error: error.message || 'An unexpected error occurred during list deletion.' };
+    }
+}
+
+// Placeholder for createNewList - needs implementation
+// export async function createNewList(name: string): Promise<ServiceResult> {
+//     // ... implementation ...
+//     console.log("createNewList called with name:", name);
+//     return { success: false, error: 'Not implemented yet' };
+// }

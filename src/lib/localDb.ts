@@ -233,6 +233,22 @@ export class NostrLocalDB extends Dexie {
 		}
 	}
 
+	/**
+	 * Deletes a specific event from the local database by its ID.
+	 * @param eventId The ID of the event to delete.
+	 * @returns A promise that resolves when the deletion attempt is complete.
+	 */
+	async deleteEventById(eventId: string): Promise<void> {
+		try {
+			await this.events.delete(eventId);
+			console.log(`Deleted event ${eventId} from local DB.`);
+		} catch (error) {
+			console.error(`Failed to delete event ${eventId} from local DB:`, error);
+			// Re-throw or handle as appropriate for the application
+			throw error; // Re-throwing allows the caller (listService) to handle the failure
+		}
+	}
+
 	// --- Query Methods (L1.3) ---
 
 	/**

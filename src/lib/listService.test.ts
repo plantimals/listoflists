@@ -3,7 +3,7 @@ import NDK, { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
 import type { NDKSigner, NostrEvent } from '@nostr-dev-kit/ndk';
 import type { NDKUser } from '@nostr-dev-kit/ndk';
 import { localDb, type StoredEvent } from '$lib/localDb';
-import { addItemToList, removeItemFromList, renameList, type Item } from '$lib/listService';
+import { addItemToList, removeItemFromList, renameList, deleteList, type Item } from '$lib/listService';
 import { nip19 } from 'nostr-tools';
 
 // Mock NDK
@@ -31,6 +31,7 @@ vi.mock('$lib/ndkService', () => ({
     ndkService: {
         getNdkInstance: vi.fn(),
         getSigner: vi.fn(),
+        publish: vi.fn(),
     },
 }));
 
@@ -59,7 +60,19 @@ vi.mock('svelte/store', async (importOriginal) => {
 		}),
 	};
 });
-// --- End mocks --- 
+
+// Mock refreshTrigger
+vi.mock('$lib/refreshStore', async () => {
+    const actual = await vi.importActual('$lib/refreshStore');
+    return {
+        ...actual,
+        refreshTrigger: {
+            subscribe: vi.fn(),
+            set: vi.fn(),
+            update: vi.fn(), // Mock the update method
+        },
+    };
+});
 
 // Access the mocked NDKUser
 const { NDKUser: MockNDKUser } = await import('@nostr-dev-kit/ndk');
@@ -67,11 +80,13 @@ const { NDKUser: MockNDKUser } = await import('@nostr-dev-kit/ndk');
 const { ndkService } = await import('$lib/ndkService');
 const { user } = await import('$lib/userStore');
 const { get } = await import('svelte/store');
+const { refreshTrigger } = await import('$lib/refreshStore'); // Import mocked trigger
 // --- End access ---
 
 // Spy variables for localDb methods and NDKEvent.sign
 let getLatestEventByCoordSpy: MockInstance<typeof localDb.getLatestEventByCoord>;
 let addOrUpdateEventSpy: MockInstance<typeof localDb.addOrUpdateEvent>;
+let deleteEventByIdSpy: MockInstance<typeof localDb.deleteEventById>;
 let signSpy: MockInstance<(signer?: NDKSigner | undefined) => Promise<string>>;
 
 // ---> NEW: Spies for kind fetching logic
@@ -254,6 +269,7 @@ describe('listService', () => {
 		// Set up spies on the ACTUAL localDb methods
 		getLatestEventByCoordSpy = vi.spyOn(localDb, 'getLatestEventByCoord').mockResolvedValue(baseList);
 		addOrUpdateEventSpy = vi.spyOn(localDb, 'addOrUpdateEvent').mockResolvedValue(undefined);
+		deleteEventByIdSpy = vi.spyOn(localDb, 'deleteEventById');
 
         // ---> NEW: Initialize spies for kind fetching
         getEventByIdSpy = vi.spyOn(localDb, 'getEventById'); // Don't mock resolved value here, do it per test
@@ -267,6 +283,10 @@ describe('listService', () => {
 			this.sig = `mock_sig_${Date.now()}`;
 			return this.sig;
 		});
+
+		// Ensure NDK publish is mocked via ndkService
+		vi.mocked(ndkService.publish).mockClear(); 
+		vi.mocked(refreshTrigger.update).mockClear(); // Clear trigger mock too
 	});
 
 	afterEach(() => {
@@ -954,7 +974,180 @@ describe('listService', () => {
 			// Verify save was attempted
 			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
 		});
-	});
-	// +++ END renameList SUITE +++
 
-}); // End describe('listService')
+		it('should add the new name as a title tag', async () => {
+			// ... test body ...
+		});
+	});
+
+	// =====================================================================
+	// ===================== Tests for deleteList ==========================
+	// =====================================================================
+	describe('deleteList', () => {
+		const listToDeleteCoord = `30001:${testPubkey}:delete-me`;
+		const originalEvent: StoredEvent = {
+			id: 'original-list-event-id-to-delete',
+			kind: 30001,
+			pubkey: testPubkey,
+			dTag: 'delete-me',
+			created_at: 1700000000,
+			tags: [['d', 'delete-me'], ['title', 'List to Delete']],
+			content: '',
+			sig: 'original-sig',
+			published: true,
+		};
+
+		let publishSpy: MockInstance;
+		let refreshTriggerUpdateSpy: MockInstance;
+
+		beforeEach(() => {
+			// Assign spies/mocks from the outer scope or re-mock if needed
+			publishSpy = vi.mocked(ndkService.publish);
+			refreshTriggerUpdateSpy = vi.mocked(refreshTrigger.update);
+		});
+
+		it('should successfully publish NIP-09 and delete list locally', async () => {
+			getLatestEventByCoordSpy.mockResolvedValue(originalEvent);
+			signSpy.mockImplementation(async function (this: NDKEvent) {
+				// Simulate signing adds ID and Sig
+				this.id = 'kind5-event-id';
+				this.sig = 'kind5-sig';
+				return 'kind5-sig';
+			});
+			publishSpy.mockResolvedValue(new Set(['wss://relay1.com']));
+			deleteEventByIdSpy.mockResolvedValue(undefined);
+
+			const result = await deleteList(listToDeleteCoord);
+
+			expect(result.success).toBe(true);
+			expect(result.error).toBeUndefined();
+
+			// Verify function calls
+			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(30001, testPubkey, 'delete-me');
+			expect(signSpy).toHaveBeenCalledOnce(); // Verify signing was attempted
+			expect(publishSpy).toHaveBeenCalledOnce(); // Verify publish was attempted
+			expect(deleteEventByIdSpy).toHaveBeenCalledWith(originalEvent.id);
+			expect(refreshTriggerUpdateSpy).toHaveBeenCalledOnce();
+
+			// Verify the event passed to publish
+			const publishedEvent = publishSpy.mock.calls[0][0] as NDKEvent; // Get the event passed to publish
+			expect(publishedEvent).toBeInstanceOf(NDKEvent);
+			expect(publishedEvent.kind).toBe(NDKKind.EventDeletion); // Check kind on the published event
+			expect(publishedEvent.tags).toEqual([['e', originalEvent.id]]); // Check tags on the published event
+			expect(publishedEvent.id).toBe('kind5-event-id'); // Check the ID assigned during mock signing
+			expect(publishedEvent.sig).toBe('kind5-sig'); // Check the sig assigned during mock signing
+		});
+
+		it('should proceed with local delete and return success even if NIP-09 publish fails', async () => {
+			getLatestEventByCoordSpy.mockResolvedValue(originalEvent);
+			signSpy.mockImplementation(async function (this: NDKEvent) {
+				this.id = 'kind5-event-id-failpub';
+				this.sig = 'kind5-sig-failpub';
+				return 'kind5-sig-failpub';
+			});
+			publishSpy.mockRejectedValue(new Error('Publish failed')); // Simulate publish error
+			deleteEventByIdSpy.mockResolvedValue(undefined);
+
+			const result = await deleteList(listToDeleteCoord);
+
+			expect(result.success).toBe(true); // Still success because local delete worked
+			expect(result.error).toBeUndefined();
+
+			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(30001, testPubkey, 'delete-me');
+			expect(signSpy).toHaveBeenCalledOnce();
+			expect(publishSpy).toHaveBeenCalledOnce(); // Publish was attempted
+			expect(deleteEventByIdSpy).toHaveBeenCalledWith(originalEvent.id);
+			expect(refreshTriggerUpdateSpy).toHaveBeenCalledOnce(); // Refresh happens on successful local delete
+		});
+
+		it('should proceed with local delete and return success even if NIP-09 signing fails', async () => {
+			getLatestEventByCoordSpy.mockResolvedValue(originalEvent);
+			signSpy.mockRejectedValue(new Error('Signing error')); // Simulate signing error
+			deleteEventByIdSpy.mockResolvedValue(undefined);
+			// publishSpy should not be called
+
+			const result = await deleteList(listToDeleteCoord);
+
+			expect(result.success).toBe(true); // Still success because local delete worked
+			expect(result.error).toBeUndefined();
+
+			expect(getLatestEventByCoordSpy).toHaveBeenCalledWith(30001, testPubkey, 'delete-me');
+			expect(signSpy).toHaveBeenCalledOnce();
+			expect(publishSpy).not.toHaveBeenCalled();
+			expect(deleteEventByIdSpy).toHaveBeenCalledWith(originalEvent.id);
+			expect(refreshTriggerUpdateSpy).toHaveBeenCalledOnce();
+		});
+
+		it('should return error if coordinate is invalid', async () => {
+			const result = await deleteList('invalid-coordinate');
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('Invalid list coordinate ID format');
+			expect(deleteEventByIdSpy).not.toHaveBeenCalled();
+			expect(refreshTriggerUpdateSpy).not.toHaveBeenCalled();
+		});
+
+		it('should return error if user does not own the list', async () => {
+			const otherUserCoord = `30001:${otherUserPubkey}:their-list`;
+			const result = await deleteList(otherUserCoord);
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('Cannot delete a list belonging to another user');
+			expect(deleteEventByIdSpy).not.toHaveBeenCalled();
+			 expect(refreshTriggerUpdateSpy).not.toHaveBeenCalled();
+		});
+
+		it('should return error if list is not found locally', async () => {
+			getLatestEventByCoordSpy.mockResolvedValue(undefined);
+			const result = await deleteList(listToDeleteCoord);
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('not found locally');
+			expect(signSpy).not.toHaveBeenCalled();
+			expect(publishSpy).not.toHaveBeenCalled();
+			expect(deleteEventByIdSpy).not.toHaveBeenCalled();
+			expect(refreshTriggerUpdateSpy).not.toHaveBeenCalled();
+		});
+
+		it('should return error if local delete fails', async () => {
+			getLatestEventByCoordSpy.mockResolvedValue(originalEvent);
+			signSpy.mockImplementation(async function (this: NDKEvent) {
+				this.id = 'kind5-event-id-faildel';
+				this.sig = 'kind5-sig-faildel';
+				return 'kind5-sig-faildel';
+			});
+			publishSpy.mockResolvedValue(new Set()); // Publish succeeds (or fails, doesn't matter)
+			deleteEventByIdSpy.mockRejectedValue(new Error('DB delete error')); // Simulate local DB error
+
+			const result = await deleteList(listToDeleteCoord);
+
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('Failed to remove list from local database');
+			expect(getLatestEventByCoordSpy).toHaveBeenCalledOnce();
+			// Sign and Publish might have been called depending on when the delete failed
+			expect(deleteEventByIdSpy).toHaveBeenCalledWith(originalEvent.id);
+			expect(refreshTriggerUpdateSpy).not.toHaveBeenCalled(); // Refresh shouldn't trigger if local delete fails
+		});
+
+		 it('should return error if user/signer/ndk is missing', async () => {
+			vi.mocked(get).mockReturnValue(null);
+			let result = await deleteList(listToDeleteCoord);
+			expect(result.success).toBe(false);
+			expect(result.error).toBe('User not logged in');
+
+			vi.mocked(get).mockReturnValue(currentUser);
+			vi.mocked(ndkService.getSigner).mockReturnValue(undefined);
+			result = await deleteList(listToDeleteCoord);
+			expect(result.success).toBe(false);
+			expect(result.error).toBe('Nostr signer not available');
+
+			vi.mocked(ndkService.getSigner).mockReturnValue(mockSigner);
+			// Ensure the mock returns undefined, which should cause the service function to return the error
+			vi.mocked(ndkService.getNdkInstance).mockReturnValue(undefined as unknown as NDK); 
+			result = await deleteList(listToDeleteCoord);
+			expect(result.success).toBe(false);
+			expect(result.error).toBe('NDK not initialized');
+
+			// Restore NDK instance for subsequent tests if any
+			vi.mocked(ndkService.getNdkInstance).mockReturnValue(mockNdkInstance as NDK);
+		});
+	});
+
+});

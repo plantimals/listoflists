@@ -379,4 +379,44 @@ describe('localDb', () => {
             expect(unpublishedPk2.map(e => e.id).sort()).toEqual(['pk2_undef', 'pk2_unpub'].sort());
         });
     });
+
+    describe('deleteEventById', () => {
+        it('should delete an existing event by ID', async () => {
+            const eventId = 'event-to-delete';
+            const event = createEvent(eventId, 1, pubkey1, 1000, 'delete me');
+            await localDb.addOrUpdateEvent(event);
+
+            // Verify it exists
+            let stored = await localDb.getEventById(eventId);
+            expect(stored).toBeDefined();
+            expect(stored?.id).toBe(eventId);
+
+            // Delete it
+            await localDb.deleteEventById(eventId);
+
+            // Verify it's gone
+            stored = await localDb.getEventById(eventId);
+            expect(stored).toBeUndefined();
+        });
+
+        it('should not throw an error when deleting a non-existent event ID', async () => {
+            const nonExistentId = 'does-not-exist';
+            
+            // Verify it doesn't exist initially (optional but good practice)
+            let stored = await localDb.getEventById(nonExistentId);
+            expect(stored).toBeUndefined();
+
+            // Attempt to delete
+            await expect(localDb.deleteEventById(nonExistentId)).resolves.toBeUndefined();
+            // Dexie's delete is idempotent, so it resolves successfully even if nothing was deleted.
+            // We just check that no error was thrown.
+
+            // Verify it still doesn't exist
+            stored = await localDb.getEventById(nonExistentId);
+            expect(stored).toBeUndefined();
+        });
+    });
+
+    // --- Existing tests for getLatestEventTimestamp, getEventById, getLatestEventByCoord, etc. ---
+    // ... (keep these tests)
 }); 
