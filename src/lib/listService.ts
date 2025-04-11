@@ -419,6 +419,15 @@ export async function renameList(
             return { success: false, error: 'List ownership mismatch (DB error?). Cannot rename.' };
         }
 
+        // --- Extract Original d Tag Value ---
+        const originalDTagValue = currentStoredEvent.tags.find(tag => Array.isArray(tag) && tag[0] === 'd')?.[1];
+        if (!originalDTagValue) {
+            console.error("Could not find original 'd' tag in list event", currentStoredEvent);
+            return { success: false, error: "Cannot rename list: original 'd' tag identifier is missing." };
+        }
+        console.log('Original dTag value found:', originalDTagValue);
+        // --- End Extract Original d Tag Value ---
+
         // 6. Create New Event Version
         const newEvent = new NDKEvent(ndkInstance);
         newEvent.kind = currentStoredEvent.kind;
@@ -426,23 +435,20 @@ export async function renameList(
         newEvent.content = currentStoredEvent.content; // Preserve content
         newEvent.created_at = Math.floor(Date.now() / 1000); // New timestamp
 
-        // 7. Tag Handling
+        // 7. Tag Handling - Keep original 'd' tag, replace 'title'
         const tagsToKeep = currentStoredEvent.tags.filter(tag => {
-            // Keep tags that are not 'd' or 'title'
-            return !Array.isArray(tag) || (tag[0] !== 'd' && tag[0] !== 'title');
+            // Keep tags that are NOT 'title'
+            return !Array.isArray(tag) || tag[0] !== 'title';
         });
 
-        // Add new 'd' and 'title' tags
+        // Add the new 'title' tag
         const newTags = [
             ...tagsToKeep,
-            ['d', trimmedNewName]
-            // Only add title tag if name is not empty, standard practice
-            // ...(trimmedNewName ? [['title', trimmedNewName]] : [])
-            // Actually, let's always add title mirroring d for consistency
-             , ['title', trimmedNewName]
+             // Only add title tag if name is not empty
+             ...(trimmedNewName ? [['title', trimmedNewName]] : [])
         ];
         newEvent.tags = newTags;
-        console.log('New tags for renamed list:', newTags);
+        console.log('New tags for renamed list (keeping original d, updating title):', newTags);
 
         // 8. Sign New Event
         console.log('Attempting to sign the renamed list event version...');
@@ -462,8 +468,8 @@ export async function renameList(
             tags: newEvent.tags,
             content: newEvent.content,
             sig: newEvent.sig,
-            // The dTag MUST be updated to the new name for parameterized kinds
-            dTag: isReplaceableKind(newEvent.kind) ? trimmedNewName : undefined,
+            // The dTag MUST remain the ORIGINAL dTag value
+            dTag: originalDTagValue,
             published: false // Mark as unpublished locally
         };
          console.log("Prepared StoredEvent:", newStoredEvent);

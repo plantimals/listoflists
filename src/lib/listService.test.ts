@@ -841,17 +841,18 @@ describe('listService', () => {
 			expect(savedEvent.content).toBe(originalList.content); // Content preserved
 			expect(savedEvent.created_at).toBeGreaterThan(originalList.created_at);
 			expect(savedEvent.published).toBe(false); // Crucial: unpublished
-			expect(savedEvent.dTag).toBe(newListName); // Crucial: dTag updated
+			expect(savedEvent.dTag).toBe('old-name'); // Crucial: dTag remains the ORIGINAL
 
 			// Verify tags
 			const dTag = savedEvent.tags.find(t => t[0] === 'd');
 			const titleTag = savedEvent.tags.find(t => t[0] === 'title');
-			expect(dTag).toEqual(['d', newListName]);
-			expect(titleTag).toEqual(['title', newListName]);
+			expect(dTag).toEqual(['d', 'old-name']); // Original d tag kept
+			expect(titleTag).toEqual(['title', newListName]); // New title tag added
 			expect(savedEvent.tags).toContainEqual(['p', 'pubkey1']);
 			expect(savedEvent.tags).toContainEqual(['e', 'eventid1']);
 			expect(savedEvent.tags).toContainEqual(['otherTag', 'value']);
-			expect(savedEvent.tags.length).toBe(5); // old d/title removed, new d/title added, 3 others kept
+			// Original title removed, new title added, original d and others kept
+			expect(savedEvent.tags.length).toBe(originalList.tags.length);
 		});
 
 		// --- Error Cases ---
