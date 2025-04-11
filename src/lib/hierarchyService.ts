@@ -1,4 +1,4 @@
-import type { TreeNodeData } from '$lib/types';
+import type { TreeNodeData, ListItem } from '$lib/types';
 // Remove direct NDK dependency for fetching, only keep types if needed
 // import NDK, { type NDKEvent, type NDKFilter } from '@nostr-dev-kit/ndk';
 import { localDb, type StoredEvent } from '$lib/localDb'; // Import localDb and StoredEvent
@@ -32,17 +32,25 @@ export function transformStoredEventToNode(event: StoredEvent): TreeNodeData {
     // Need to parse title tag from tags array
     const name = event.tags.find(t => t[0] === 'title')?.[1] || dTag || `Kind ${kind} List`;
 
-    // Count the number of items ('p', 'e', 'a' tags) in the list.
-    const itemCount = event.tags.filter(t => ['p', 'e', 'a'].includes(t[0])).length;
+    // Count the number of items ('p', 'e', 'a', 'nip05' tags) in the list.
+    const itemCount = event.tags.filter(t => ['p', 'e', 'a', 'nip05'].includes(t[0])).length;
 
-    // Extract 'p', 'e', and 'a' tags specifically for the items list
-    const items: Array<{ type: 'p' | 'e' | 'a'; value: string; relayHint?: string }> = event.tags
-        .filter(t => t[0] === 'p' || t[0] === 'e' || t[0] === 'a') // Include 'a' tags here too if needed for display/actions
-        .map(t => ({
-            type: t[0] as 'p' | 'e' | 'a', // Cast type
-            value: t[1],
-            relayHint: t[2] // Capture relay hint if present
-        }));
+    // Extract 'p', 'e', 'a', and 'nip05' tags specifically for the items list
+    const items: Array<ListItem> = event.tags
+        .filter(t => t[0] === 'p' || t[0] === 'e' || t[0] === 'a' || t[0] === 'nip05') 
+        .map(t => {
+            const baseItem = {
+                type: t[0] as 'p' | 'e' | 'a' | 'nip05', // Cast type
+                value: t[1],
+                relayHint: (t[0] === 'e' || t[0] === 'a') ? t[2] : undefined, // Capture relay hint only if relevant
+            };
+            // If it's a nip05 tag, add the pubkey (assuming it's the 3rd element)
+            if (baseItem.type === 'nip05' && t[2]) {
+                 return { ...baseItem, pubkey: t[2] };
+            } else {
+                return baseItem;
+            }
+        });
 
     // Construct and return the TreeNodeData object.
     return {

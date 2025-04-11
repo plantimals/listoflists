@@ -6,7 +6,7 @@
     import { NDKEvent, type NDKTag, NDKList } from '@nostr-dev-kit/ndk';
     import { nip19 } from 'nostr-tools';
     import { localDb } from '$lib/localDb';
-    import { addItemToList, type ListServiceDependencies } from '$lib/listService';
+    import { addItemToList } from '$lib/listService'; // Removed ListServiceDependencies import
 
     /**
      * The target list ID (a-tag coordinate or event ID) to add the item to.
@@ -71,12 +71,11 @@
             return;
         }
 
-        const deps: ListServiceDependencies = { currentUser: null, ndkInstance: ndkInstanceForEvent };
         const trimmedInput = itemInput.trim();
 
         try {
             console.log(`AddItemModal: Calling addItemToList for list '${targetListId}' with input: '${trimmedInput}'`);
-            const result = await addItemToList(targetListId, trimmedInput, deps);
+            const result = await addItemToList(targetListId, trimmedInput);
 
             if (result.success) {
                 console.log(`AddItemModal: Item added successfully to list '${targetListId}'.`);
@@ -136,7 +135,7 @@
         <textarea
             class="textarea textarea-bordered w-full"
             rows="3"
-            placeholder="Enter npub, naddr, note1, nevent, hex ID, or coordinate (kind:pubkey:dTag)..."
+            placeholder="Enter npub, naddr, note1, nevent, hex ID, coordinate (kind:pubkey:dTag), or NIP-05 (user@domain.com)..."
             bind:value={itemInput}
             disabled={isSaving}
         ></textarea>

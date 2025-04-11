@@ -62,7 +62,7 @@ This document assesses the implementation status of User Stories within this Epi
 
 **CORE-STORY-008: Reorder Items within List**
 
-* **Status:** To Do
+* **Status:** Won't Do
 * **Remaining Work:**
     * Implement a UI mechanism for reordering (e.g., drag-and-drop, buttons) in `NodeItemsList.svelte` or similar.
     * Implement the backend logic in `listService.ts` to create a new event version with tags in the new order (AC2 [cite: 74]).

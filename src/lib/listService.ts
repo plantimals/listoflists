@@ -1,6 +1,6 @@
 import { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
 import { localDb, type StoredEvent, isReplaceableKind } from '$lib/localDb';
-import { nip19 } from 'nostr-tools'; // Import nip19 from nostr-tools
+import { nip19, nip05 } from 'nostr-tools'; // Import nip19 and nip05 from nostr-tools
 import { ndkService } from '$lib/ndkService';
 import { user } from '$lib/userStore';
 import { get } from 'svelte/store';
@@ -94,7 +94,7 @@ export async function addItemToList(
         let eventKind: number | undefined = undefined;
         let hexEventId: string | undefined = undefined;
         let potentialRelayHint: string | undefined = undefined;
-        let potentialTagType: 'p' | 'e' | 'a' | undefined = undefined;
+        let potentialTagType: 'p' | 'e' | 'a' | 'nip05' | undefined = undefined;
 
         try {
             const decoded = nip19.decode(trimmedInput);
@@ -147,7 +147,51 @@ export async function addItemToList(
                      tagToAdd = ['a', trimmedInput];
                      potentialTagType = 'a';
                  } else {
-                    console.log("Input is not a valid NIP-19 string, hex ID, or coordinate.");
+                    console.log("Input is not a valid NIP-19 string, hex ID, or coordinate. Checking NIP-05...");
+
+                    // --- NIP-05 Check ---
+                    const nip05Regex = /^.+@.+\..+$/;
+                    if (nip05Regex.test(trimmedInput)) {
+                        console.log("Detected potential NIP-05 identifier:", trimmedInput);
+                        potentialTagType = 'nip05';
+
+                        // ---> NIP-05 Duplicate Check (Moved BEFORE resolution) <--- 
+                        const isNip05Duplicate = currentStoredEvent.tags.some(tag =>
+                            Array.isArray(tag) &&
+                            tag.length >= 3 && // NIP05 tag should have 3 parts
+                            tag[0] === 'nip05' &&
+                            tag[1] === trimmedInput
+                        );
+
+                        if (isNip05Duplicate) {
+                            console.log("NIP-05 identifier already exists in the list, not adding duplicate.");
+                            return { success: true, newEventId: currentStoredEvent.id };
+                        }
+                        // --- End Duplicate Check ---
+
+                        // TODO: Implement check for designated list kind (e.g., 30005) based on FR-17.
+
+                        try {
+                            const resolvedProfile = await nip05.queryProfile(trimmedInput);
+                            if (resolvedProfile && resolvedProfile.pubkey) {
+                                console.log(`NIP-05 resolved successfully: ${trimmedInput} -> ${nip19.npubEncode(resolvedProfile.pubkey)}`);
+
+                                // No need for duplicate check here anymore
+
+                                tagToAdd = ["nip05", trimmedInput, resolvedProfile.pubkey];
+                                // Note: potentialTagType was already set to 'nip05'
+                            } else {
+                                console.warn(`NIP-05 identifier ${trimmedInput} could not be resolved or profile has no pubkey.`);
+                                return { success: false, error: "Failed to resolve NIP-05 identifier or identifier not found." };
+                            }
+                        } catch (nip05Error: any) {
+                            console.error(`Error resolving NIP-05 identifier ${trimmedInput}:`, nip05Error);
+                            return { success: false, error: "Failed to resolve NIP-05 identifier or identifier not found." };
+                        }
+                    } else {
+                        console.log("Input is not a NIP-05 identifier.");
+                    }
+                    // --- End NIP-05 Check ---
                  }
             }
         }
@@ -197,7 +241,7 @@ export async function addItemToList(
         // --- End Fetch and Validation ---
 
         if (!tagToAdd) {
-             return { success: false, error: 'Invalid or unsupported input format (expected npub, nprofile, naddr, note, nevent, hex ID, or coordinate)' };
+             return { success: false, error: 'Invalid or unsupported input format (expected npub, nprofile, naddr, note, nevent, hex ID, NIP-05 identifier, or coordinate)' };
         }
         console.log('Final tag determined:', tagToAdd);
 

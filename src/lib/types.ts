@@ -2,9 +2,10 @@
  * Represents a single item within a list (e.g., a profile or event pointer).
  */
 export type ListItem = { 
-    type: 'p' | 'e'; // 'a' type for nested lists handled as children, not items here
-    value: string; 
-    relayHint?: string 
+    type: 'p' | 'e' | 'a' | 'nip05'; // Added 'nip05' and restored 'a' for completeness
+    value: string; // For p=pubkey, e=eventid, a=coordinate, nip05=identifier
+    relayHint?: string; // Optional relay hint (e.g., for 'e', 'a')
+    pubkey?: string; // Optional pubkey (e.g., for 'nip05')
 };
 
 /**

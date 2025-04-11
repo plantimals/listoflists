@@ -2,6 +2,7 @@
   import type { ListItem } from '$lib/types'; // Adjust import as needed
   import UserItem from '$lib/components/UserItem.svelte';
   import NoteItem from '$lib/components/NoteItem.svelte';
+  import Nip05Item from '$lib/components/Nip05Item.svelte'; // Import the new component
   import { localDb, type StoredEvent } from '$lib/localDb';
   import { ndkService } from '$lib/ndkService';
   import { NDKEvent } from '@nostr-dev-kit/ndk';
@@ -96,6 +97,8 @@
         <UserItem pubkey={item.value} />
     {:else if item.type === 'e'}
         <NoteItem eventId={item.value} />
+    {:else if item.type === 'nip05'}
+        <Nip05Item identifier={item.value} pubkey={item.pubkey ?? ''} />
     {/if}
 
     <!-- Remove Item Button -->

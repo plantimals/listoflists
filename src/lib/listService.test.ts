@@ -4,7 +4,19 @@ import type { NDKSigner, NostrEvent } from '@nostr-dev-kit/ndk';
 import type { NDKUser } from '@nostr-dev-kit/ndk';
 import { localDb, type StoredEvent } from '$lib/localDb';
 import { addItemToList, removeItemFromList, renameList, deleteList, type Item } from '$lib/listService';
-import { nip19 } from 'nostr-tools';
+import { nip19, nip05 } from 'nostr-tools';
+
+// Mock nostr-tools
+vi.mock('nostr-tools', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('nostr-tools')>();
+	return {
+		...actual,
+		nip19: actual.nip19, // Keep actual nip19
+		nip05: {
+			queryProfile: vi.fn(), // Mock queryProfile
+		},
+	};
+});
 
 // Mock NDK
 vi.mock('@nostr-dev-kit/ndk', async (importOriginal) => {
@@ -81,6 +93,7 @@ const { ndkService } = await import('$lib/ndkService');
 const { user } = await import('$lib/userStore');
 const { get } = await import('svelte/store');
 const { refreshTrigger } = await import('$lib/refreshStore'); // Import mocked trigger
+const { nip05: mockNip05 } = await import('nostr-tools'); // <-- Added import for mocked nip05
 // --- End access ---
 
 // Spy variables for localDb methods and NDKEvent.sign
@@ -687,6 +700,95 @@ describe('listService', () => {
 			expect(result.error).toBe('User not logged in');
 			// User check happens before DB query
 		});
+
+		// Test adding a NIP-05 identifier successfully
+		it('should add a valid NIP-05 identifier', async () => {
+			const nip05Input = 'test@example.com';
+			// Use a valid hex pubkey from test data
+			const resolvedPubkey = testPubkey;
+			const expectedTag = ['nip05', nip05Input, resolvedPubkey];
+
+			getLatestEventByCoordSpy.mockResolvedValue(baseList);
+			// Cast the mock implementation correctly via unknown
+			(mockNip05.queryProfile as unknown as MockInstance).mockResolvedValue({ pubkey: resolvedPubkey });
+
+			const result = await addItemToList(listCoordinateId, nip05Input);
+
+			expect(result.success).toBe(true);
+			expect(result.error).toBeUndefined();
+			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+			const savedEvent = addOrUpdateEventSpy.mock.calls[0][0];
+			expect(savedEvent.tags).toEqual(expect.arrayContaining([expectedTag]));
+			expect(savedEvent.tags.length).toBe(baseList.tags.length + 1);
+		});
+
+		// Test adding a NIP-05 identifier that fails to resolve (returns null)
+		it('should return error if NIP-05 identifier fails to resolve (returns null)', async () => {
+			const nip05Input = 'notfound@example.com';
+
+			getLatestEventByCoordSpy.mockResolvedValue(baseList);
+			// Cast the mock implementation correctly via unknown
+			(mockNip05.queryProfile as unknown as MockInstance).mockResolvedValue(null);
+
+			const result = await addItemToList(listCoordinateId, nip05Input);
+
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('Failed to resolve NIP-05 identifier');
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		});
+
+		// Test adding a NIP-05 identifier that fails to resolve (throws error)
+		it('should return error if NIP-05 identifier resolution throws an error', async () => {
+			const nip05Input = 'error@example.com';
+
+			getLatestEventByCoordSpy.mockResolvedValue(baseList);
+			// Cast the mock implementation correctly via unknown
+			 (mockNip05.queryProfile as unknown as MockInstance).mockRejectedValue(new Error('Network Error'));
+
+			const result = await addItemToList(listCoordinateId, nip05Input);
+
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('Failed to resolve NIP-05 identifier');
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		});
+
+		// Test adding a duplicate NIP-05 identifier
+		it('should return success without modifying if NIP-05 identifier is a duplicate', async () => {
+			const nip05Input = 'duplicate@example.com';
+			const existingListWithNip05: StoredEvent = {
+				...baseList,
+				tags: [...baseList.tags, ['nip05', nip05Input, 'some_existing_pubkey']],
+			};
+
+			getLatestEventByCoordSpy.mockResolvedValue(existingListWithNip05);
+			// nip05.queryProfile shouldn't even be called if duplicate check works
+
+			const result = await addItemToList(listCoordinateId, nip05Input);
+
+			expect(result.success).toBe(true);
+			expect(result.error).toBeUndefined();
+			expect(result.newEventId).toBe(existingListWithNip05.id); // Should return original ID
+			expect(mockNip05.queryProfile).not.toHaveBeenCalled(); // Verify resolution wasn't attempted
+			expect(addOrUpdateEventSpy).not.toHaveBeenCalled();
+		});
+
+		// TODO: Add test case for adding NIP-05 to wrong list kind when kind check is implemented.
+
+		// Regression Test: Ensure adding a standard npub still works
+		it('REGRESSION: should still add a valid npub identifier correctly', async () => {
+			const npubInput = nip19.npubEncode(testPubkey);
+			const expectedTag = ['p', testPubkey];
+
+			getLatestEventByCoordSpy.mockResolvedValue(baseList);
+
+			const result = await addItemToList(listCoordinateId, npubInput);
+
+			expect(result.success).toBe(true);
+			expect(addOrUpdateEventSpy).toHaveBeenCalledOnce();
+			const savedEvent = addOrUpdateEventSpy.mock.calls[0][0];
+			expect(savedEvent.tags).toEqual(expect.arrayContaining([expectedTag]));
+		});
+
 	});
 
 	describe('removeItemFromList', () => {
