@@ -106,5 +106,21 @@
     * **AC 6:** Borders used for separating items (if any) are subtle and use a light gray from the defined palette [RefUI: Borders].
     * **AC 7:** UI elements prioritize conveying information clearly and efficiently, minimizing purely decorative aspects [Tufte: Data-Ink, Clarity].
 
+HIER-STORY-011: Command Palette Navigation
+
+    As a user, I want to open a command palette (e.g., via keyboard shortcut) and type to quickly search for and navigate to lists, profiles, or content so that I can efficiently jump between different parts of my curated information without relying solely on the visual tree [cite: NFR-03].
+    AC 1: A specific keyboard shortcut (e.g., Ctrl+K / Cmd+K) activates the command palette overlay.
+    AC 2: The palette presents an input field for typing search queries.
+    AC 3: As I type, a list of matching results appears below the input field, dynamically filtering based on the query.
+    AC 4: Matching logic searches across:
+        List names (title or d tags)   
+
+Profile display names or npub identifiers  
+(Optional V2) Addressable resource titles (e.g., d tag of kind:30023 long-form posts)  
+
+AC 5: Each result clearly indicates the item type (list, profile, resource) and its name/identifier.
+AC 6: Selecting a result using keyboard (Enter) or mouse click dismisses the palette and navigates the main view to the selected item (e.g., highlighting the list in the tree, opening the profile view, displaying the resource).
+AC 7: Pressing the Escape key dismisses the command palette without taking action.
+AC 8: The search and display are performant, providing results quickly even with a large local dataset [cite: NFR-02].
 ---
 
