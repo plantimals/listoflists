@@ -2,31 +2,34 @@
     // Keep the props definition
     // import type { TreeNodeData } from '$lib/hierarchyService'; // Import path might need adjustment based on project structure
     import type { TreeNodeData } from '$lib/types'; // Corrected import and type name
-    import UserItem from '$lib/components/UserItem.svelte'; // Import UserItem
-    import NoteItem from '$lib/components/NoteItem.svelte'; // Import NoteItem
+    // Removed UserItem import
+    // Removed NoteItem import
+    import NodeHeader from './NodeHeader.svelte'; // Import the new header component
+    import NodeActions from './NodeActions.svelte'; // Import the new actions component
+    import NodeItemsList from '$lib/components/NodeItemsList.svelte'; // Use $lib alias for import
     import { get } from 'svelte/store';
     import { user } from '$lib/userStore';
     import { refreshTrigger } from '$lib/refreshStore';
-    import { addItemToList, removeItemFromList } from '$lib/listService'; // Removed ListServiceDependencies import
+    // Removed removeItemFromList import
     import * as listService from '$lib/listService'; // Import listService namespace
     // import AddItemModal from './AddItemModal.svelte'; // Import the modal - Removed
     import { createEventDispatcher } from 'svelte'; // Import dispatcher
-    import { localDb, type StoredEvent } from '$lib/localDb';
-    import { ndkService } from '$lib/ndkService'; // Added
-    import { NDKEvent } from '@nostr-dev-kit/ndk';
+    import { localDb, type StoredEvent } from '$lib/localDb'; // Re-added for removeListFromParent
+    import { ndkService } from '$lib/ndkService'; // Re-added for removeListFromParent
+    import { NDKEvent } from '@nostr-dev-kit/ndk'; // Re-added for removeListFromParent
     import { nip19 } from 'nostr-tools'; // Import nip19
     import { isOnline } from '$lib/networkStatusStore'; // <-- Ensure isOnline is imported
     // Import Icon component and the specific icon definition
-    import { Icon, PencilSquare, Trash } from 'svelte-hero-icons';
+    // import { Icon, PencilSquare, Trash } from 'svelte-hero-icons';
 
-    export let node: TreeNodeData; // Corrected type annotation
+    export let node: TreeNodeData;
     export let level: number = 0;
 
     let expanded: boolean = false; // State for expand/collapse
     let isAdding: boolean = false;
-    let isRemovingItemId: string | null = null; // Store which item is being removed
-    let errorMessage: string | null = null; // Declare errorMessage
-    let isDeleting: boolean = false; // Add loading state for delete
+    // Removed isRemovingItemId state
+    let errorMessage: string | null = null; // Declare errorMessage (keep for handleDeleteList)
+    let isDeleting: boolean = false; // Add loading state for delete (keep for handleDeleteList)
 
     // State for Add Item Modal context - Removed
     // let addItemTargetListId: string | null = null;
@@ -43,82 +46,9 @@
         collapsed = !collapsed;
     }
 
-    // Define the item type explicitly, matching the structure used in listService/hierarchyService
-    type ListItem = { type: 'p' | 'e'; value: string };
+    // Removed ListItem type definition
 
-    async function handleRemoveItem(itemId: string, itemType: 'p' | 'e') {
-        isRemovingItemId = itemId;
-        errorMessage = null;
-
-        // Get Signer and NDK Instance from Service
-        const signer = ndkService.getSigner();
-        const ndkInstanceForEvent = ndkService.getNdkInstance();
-
-        if (!signer || !ndkInstanceForEvent) {
-            errorMessage = 'Signer or NDK instance not available.';
-            console.error(errorMessage);
-            isRemovingItemId = null;
-            return;
-        }
-        
-        // Removed currentUser check as it's implicit via signer
-        // Removed get(ndk) and related check
-
-        try {
-            const originalListEventData = await localDb.getEventById(node.eventId); // Use list ID from node
-            if (!originalListEventData) {
-                throw new Error(`Original list event ${node.eventId} not found locally.`);
-            }
-
-            // Create a new NDKEvent instance using the NDK instance from the service
-            const newListEvent = new NDKEvent(ndkInstanceForEvent); // Pass the NDK instance
-            newListEvent.kind = originalListEventData.kind;
-            newListEvent.content = originalListEventData.content;
-
-            // Filter out the tag to be removed
-            newListEvent.tags = originalListEventData.tags.filter(tag => !(tag[0] === itemType && tag[1] === itemId));
-
-            // Re-add replaceable list identifier tags if needed (e.g., 'd')
-            const dTagValue = originalListEventData.tags.find(tag => tag[0] === 'd')?.[1];
-            if (dTagValue && !newListEvent.tags.some(tag => tag[0] === 'd')) {
-                newListEvent.tags.push(['d', dTagValue]);
-            }
-            const titleValue = originalListEventData.tags.find(tag => tag[0] === 'title')?.[1];
-             if (titleValue && !newListEvent.tags.some(tag => tag[0] === 'title')) {
-                newListEvent.tags.push(['title', titleValue]);
-            }
-
-            // Sign using the signer from the service
-            await newListEvent.sign(signer);
-            console.log('Signed event after item removal:', newListEvent);
-
-            // Save updated event to local DB
-            const storedEventData: StoredEvent = {
-                // ... map fields from newListEvent ...
-                 id: newListEvent.id,
-                 kind: newListEvent.kind,
-                 pubkey: newListEvent.pubkey,
-                 created_at: newListEvent.created_at ?? 0,
-                 tags: newListEvent.tags,
-                 content: newListEvent.content,
-                 sig: newListEvent.sig ?? '',
-                 dTag: dTagValue, // Use stored dTagValue
-                 published: false // Mark as unpublished until sync confirms
-            };
-            await localDb.addOrUpdateEvent(storedEventData);
-            console.log('Updated list event saved locally.');
-
-            dispatch('itemremoved', { listId: node.id }); // Notify parent
-            // Update the store value to trigger listeners
-            refreshTrigger.update(n => n + 1);
-
-        } catch (err: any) {
-            console.error('Error removing item:', err);
-            errorMessage = `Failed to remove item: ${err.message}`;
-        } finally {
-            isRemovingItemId = null;
-        }
-    }
+    // Removed handleRemoveItem function
 
     // Function to dispatch event for opening the modal
     function openAddItemModal() {
@@ -157,14 +87,10 @@
     //     dispatch('listchanged'); // Dispatch event up to parent
     // }
 
+    // Kept removeListFromParent - Requires localDb, ndkService, NDKEvent
     async function removeListFromParent(childListId: string, parentListId: string) {
         console.log(`Removing child list ${childListId} from parent ${parentListId}`);
 
-        // const ndkInstance = get(ndk); // Removed
-        // if (!ndkInstance) {
-        //     console.error('NDK instance not available.');
-        //     return;
-        // }
         // Get signer from service
         const signer = ndkService.getSigner();
         const ndkInstanceForEvent = ndkService.getNdkInstance();
@@ -184,6 +110,8 @@
             const updatedEvent = new NDKEvent(ndkInstanceForEvent);
             updatedEvent.kind = parentEventData.kind;
             updatedEvent.content = parentEventData.content;
+            // Ensure tags are copied before filtering
+            updatedEvent.tags = parentEventData.tags.filter(tag => !(tag[0] === 'a' && tag[1].includes(childListId))); // Assuming 'a' tag format includes coordinate
 
             // 3. Sign the updated event
             await updatedEvent.sign(signer);
@@ -242,130 +170,38 @@
     // No other script logic needed for this step
 </script>
 
-<!-- Main row for the node -->
-<div
-    class="flex items-center space-x-2 py-1 hover:bg-base-200 rounded cursor-pointer"
-    style="padding-left: {level * 1.5}rem;"
-    on:click={() => {
-        // Toggle only if items exist or children exist
-        if ((node.items && node.items.length > 0) || (node.children && node.children.length > 0)) {
-            expanded = !expanded;
-        }
-    }}
-    title="{node.name} (Event ID: {node.id})"
->
-    <!-- Expander Icon Area -->
-    <div class="w-4 h-4 flex-shrink-0 flex items-center justify-center">
-        {#if node.children && node.children.length > 0}
-            <!-- Expander for children -->
-            <span
-                class="cursor-pointer text-accent text-xs"
-                on:click|stopPropagation={() => expanded = !expanded}
-                title={expanded ? 'Collapse' : 'Expand'}
-            >
-                {#if expanded}
-                    ▼
-                {:else}
-                    ▶
-                {/if}
-            </span>
-        {:else if node.items && node.items.length > 0}
-            <!-- Indicator that items can be expanded (if no children) -->
-            <span class="w-4 text-xs text-base-content/50" title="Expand to show items">•</span>
-        {:else}
-            <!-- Placeholder for alignment -->
-            <span class="w-4"></span>
-        {/if}
-    </div>
+<!-- Use the new NodeHeader component -->
+<NodeHeader {node} {level} bind:expanded>
+    <!-- Pass NodeActions into the header slot -->
+    <NodeActions
+        slot="actions"
+        {node}
+        currentUserPubkey={$user?.pubkey}
+        isOnline={$isOnline}
+        bind:isDeleting={isDeleting}
+        on:openadditem={openAddItemModal} 
+        on:openrenamemodal={openRenameModal} 
+        on:deletelist={handleDeleteList}
+    />
+</NodeHeader>
 
-    <!-- Node Name -->
-    <span class="flex-grow font-medium truncate">
-        {node.name}
-    </span>
-
-    <!-- Badges and Add Button (Merged) -->
-    <div class="flex items-center flex-shrink-0 space-x-1 ml-auto">
-        <!-- Badges -->
-        <div class="badge badge-neutral badge-sm font-mono" title="Kind">K:{node.kind}</div>
-        {#if node.dTag}
-            <div class="badge badge-outline badge-sm font-mono" title="dTag">{node.dTag}</div>
-        {/if}
-        <div class="badge badge-outline badge-sm" title="Items">{node.itemCount} items</div>
-
-        <!-- Add Button -->
-        {#if node.pubkey === $user?.pubkey}
-            <!-- Action Buttons for Owner -->
-            <div class="flex items-center space-x-1">
-                <!-- Add Item Button -->
-                <button
-                    class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-accent disabled:text-base-content/30"
-                    title="Add item to this list"
-                    on:click|stopPropagation={openAddItemModal}
-                    disabled={!$isOnline}
-                >
-                    +
-                </button>
-                <!-- Rename Button -->
-                <button
-                    class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-warning disabled:text-base-content/30"
-                    title="Rename this list"
-                    on:click|stopPropagation={openRenameModal}
-                    disabled={!$isOnline}
-                >
-                    <Icon src={PencilSquare} class="w-4 h-4" />
-                </button>
-                <!-- Delete Button -->
-                 <button
-                     class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-error disabled:text-base-content/30"
-                     title="Delete this list"
-                     on:click|stopPropagation={handleDeleteList}
-                     disabled={!$isOnline || isDeleting}
-                 >
-                     {#if isDeleting}
-                         <span class="loading loading-spinner loading-xs"></span>
-                     {:else}
-                         <Icon src={Trash} class="w-4 h-4" />
-                     {/if}
-                 </button>
-            </div>
-        {/if}
-    </div>
-</div>
-
-<!-- Render Items when Expanded -->
+<!-- Render Items using NodeItemsList when Expanded -->
 {#if expanded && node.items && node.items.length > 0}
-    <div class="pl-6" style="padding-left: {level * 1.5 + 1.5}rem;">
-        {#each node.items as item (item.value)} <!-- Use item.value as key -->
-            <div class="flex items-center py-1 hover:bg-base-300 rounded text-sm">
-                {#if item.type === 'p'}
-                    <UserItem pubkey={item.value} />
-                {:else if item.type === 'e'}
-                    <NoteItem eventId={item.value} /> <!-- Corrected prop name: noteId -> eventId -->
-                {/if}
-
-                <!-- Remove Item Button -->
-                <button
-                    class="btn btn-xs btn-ghost text-error ml-auto mr-1"
-                    on:click={() => handleRemoveItem(item.value, item.type)}
-                    disabled={isRemovingItemId !== null || !$isOnline}
-                    title={!$isOnline ? 'Cannot remove item while offline' : (isRemovingItemId !== null ? 'Removing...' : 'Remove item')}
-                >
-                    {#if isRemovingItemId === item.value}
-                        <span class="loading loading-spinner loading-xs"></span>
-                    {:else}
-                        ✕
-                    {/if}
-                </button>
-            </div>
-        {/each}
-    </div>
+    <NodeItemsList {node} {level} />
 {/if}
+
 
 <!-- Recursive Children -->
 {#if expanded && node.children && node.children.length > 0}
   <div class="mt-1" style="margin-left: 0;"> <!-- Adjust margin if needed, or keep consistent -->
     {#each node.children as childNode (childNode.id)}
-      <svelte:self node={childNode} level={level + 1} on:listchanged={() => dispatch('listchanged')} />
+      <svelte:self 
+          node={childNode} 
+          level={level + 1} 
+          on:listchanged 
+          on:openadditem 
+          on:openrenamemodal
+          />
     {/each}
   </div>
 {/if}
