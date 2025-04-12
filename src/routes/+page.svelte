@@ -23,6 +23,7 @@
   import { syncService } from '$lib/syncService'; // <-- IMPORT syncService
   import { nip05 } from 'nostr-tools'; // <-- Import nip05
   import HierarchyWrapper from '$lib/components/HierarchyWrapper.svelte'; // <-- Import wrapper
+  import { verifyNip05 } from '$lib/nip05Service'; // <-- Import the new service function
 
   let isLoadingProfile: boolean = false;
   let isLoadingInitialLists: boolean = false; // Initial load from local + potentially network
@@ -485,7 +486,7 @@
       }
   }
 
-  // +++ NIP-05 Check Handler +++
+  // +++ NIP-05 Check Handler (Refactored) +++
   async function handleCheckNip05(event: CustomEvent<{ identifier: string; cachedNpub: string; listId: string }>) {
     const { identifier, cachedNpub } = event.detail;
     console.log(`Received checknip05 event for: ${identifier} (Cached: ${cachedNpub ? cachedNpub.substring(0,6) : 'none'})`);
@@ -494,32 +495,12 @@
     nip05VerificationStates[identifier] = { status: 'checking', newlyResolvedNpub: null, errorMsg: null };
     nip05VerificationStates = { ...nip05VerificationStates }; // Trigger reactivity
 
-    try {
-      // 2. Perform NIP-05 Query
-      const resolvedProfile = await nip05.queryProfile(identifier);
+    // 2. Call the verification service
+    const resultState = await verifyNip05(identifier, cachedNpub);
 
-      if (resolvedProfile && resolvedProfile.pubkey) {
-        // 3a. Compare resolved pubkey with cached pubkey
-        if (resolvedProfile.pubkey === cachedNpub) {
-          console.log(`NIP-05 Match: ${identifier} -> ${resolvedProfile.pubkey.substring(0,6)}`);
-          nip05VerificationStates[identifier] = { status: 'match', newlyResolvedNpub: null, errorMsg: null };
-        } else {
-          console.log(`NIP-05 Mismatch: ${identifier} resolved to ${resolvedProfile.pubkey.substring(0,6)}, expected ${cachedNpub ? cachedNpub.substring(0,6) : 'none'}`);
-          nip05VerificationStates[identifier] = { status: 'mismatch', newlyResolvedNpub: resolvedProfile.pubkey, errorMsg: null };
-        }
-      } else {
-        // 3b. Resolution failed (no profile or no pubkey)
-        console.warn(`NIP-05 Resolution failed for: ${identifier}`);
-        nip05VerificationStates[identifier] = { status: 'failed', newlyResolvedNpub: null, errorMsg: "NIP-05 resolution failed or profile has no pubkey." };
-      }
-    } catch (error: any) {
-      // 3c. Error during resolution
-      console.error(`Error during NIP-05 resolution for ${identifier}:`, error);
-      nip05VerificationStates[identifier] = { status: 'failed', newlyResolvedNpub: null, errorMsg: error.message || "An unexpected error occurred." };
-    }
-
-    // 4. Update state again to trigger reactivity with the final result
-    nip05VerificationStates = { ...nip05VerificationStates };
+    // 3. Update state with the final result
+    nip05VerificationStates[identifier] = resultState;
+    nip05VerificationStates = { ...nip05VerificationStates }; // Trigger reactivity
   }
   // -----------------------------
 
