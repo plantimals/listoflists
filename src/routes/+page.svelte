@@ -26,9 +26,11 @@
   import { verifyNip05 } from '$lib/nip05Service'; // <-- Import the new service function
   import Nip46ConnectModal from '$lib/components/Nip46ConnectModal.svelte'; // <-- Import the NIP-46 Modal
   import ProfileView from '$lib/components/ProfileView.svelte'; // <-- Import ProfileView
+  import AggregatedFeedView from '$lib/components/AggregatedFeedView.svelte'; // Import new component
+  import { Icon, ArrowLeft } from 'svelte-hero-icons';
 
   let isLoadingProfile: boolean = false;
-  let isLoadingInitialLists: boolean = false; // Initial load from local + potentially network
+  let isLoadingInitialLists: boolean = true; // Initial load from local + potentially network
   let isSyncing: boolean = false; // Manual sync process
   let isInitialSyncing: boolean = false; // Tracks background fetch after initial load
   let lastLoadedPubkey: string | null = null; // Guard against multiple triggers
@@ -61,6 +63,8 @@
 
   // +++ VIEW STATE +++
   let viewingNpub: string | null = null; // Controls which view is active
+  let viewingFeedForNodeId: string | null = null; // State for feed view
+  let viewingFeedForListName: string | null = null;
   // ------------------
 
   // +++ NIP-05 Verification State Map (using imported type) +++
@@ -163,7 +167,7 @@
     profile.set(null);
     listHierarchy.set([]);
     isHierarchyLoading.set(false);
-    isLoadingInitialLists = false;
+    isLoadingInitialLists = true;
     isLoadingProfile = false;
     isSyncing = false;
     isInitialSyncing = false;
@@ -496,7 +500,7 @@
         profile.set(null);
         listHierarchy.set([]);
         isLoadingProfile = false;
-        isLoadingInitialLists = false;
+        isLoadingInitialLists = true;
         isHierarchyLoading.set(false);
         isSyncing = false; // Reset sync state on logout
         isInitialSyncing = false;
@@ -638,12 +642,22 @@
   // +++ Event Handlers from Hierarchy +++
   function handleViewProfile(event: CustomEvent<{ npub: string }>) {
     console.log(`+page.svelte: Received viewprofile event for npub: ${event.detail.npub}`);
-    if (event.detail.npub) {
-      viewingNpub = event.detail.npub;
-    } else {
-        console.error('+page.svelte: viewprofile event received without npub detail.');
-        generalErrorMessage = 'Cannot view profile: Missing identifier.';
-    }
+    viewingFeedForNodeId = null; // Close feed view if open
+    viewingFeedForListName = null;
+    viewingNpub = event.detail.npub;
+  }
+
+  function handleViewFeed(event: CustomEvent<{ listNodeId: string; listName: string }>) {
+    console.log(`+page.svelte: Received viewfeed event for Node ID: ${event.detail.listNodeId}`);
+    viewingNpub = null; // Ensure profile view is closed
+    viewingFeedForNodeId = event.detail.listNodeId;
+    viewingFeedForListName = event.detail.listName;
+  }
+
+  function handleBackToLists() {
+    viewingNpub = null;
+    viewingFeedForNodeId = null;
+    viewingFeedForListName = null;
   }
 
   onMount(() => {
@@ -722,11 +736,21 @@
     {#if viewingNpub}
       <!-- Profile View -->
       <div class="mb-4">
-        <button class="btn btn-sm btn-ghost" on:click={() => viewingNpub = null}>
-          &larr; Back to Lists
+        <button class="btn btn-sm btn-ghost" on:click={handleBackToLists}>
+          <Icon src={ArrowLeft} class="h-4 w-4 mr-1" />
+          Back to Lists
         </button>
       </div>
       <ProfileView npub={viewingNpub} currentUserLists={currentUserLists} />
+    {:else if viewingFeedForNodeId && viewingFeedForListName}
+      <!-- Aggregated Feed View -->
+      <div class="mb-4">
+        <button class="btn btn-ghost btn-sm" on:click={handleBackToLists}>
+          <Icon src={ArrowLeft} class="h-4 w-4 mr-1" />
+          Back to Lists
+        </button>
+      </div>
+      <AggregatedFeedView listNodeId={viewingFeedForNodeId} listName={viewingFeedForListName} />
     {:else}
       <!-- List Hierarchy View -->
       <div class="divider">My Lists</div>
@@ -739,6 +763,7 @@
         on:viewprofile={handleViewProfile}
         on:checknip05={handleCheckNip05}
         on:listchanged={handleListChanged}
+        on:viewfeed={handleViewFeed}
       />
       <button
         class="btn btn-primary mt-6"

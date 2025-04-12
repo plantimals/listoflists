@@ -2,17 +2,39 @@
     import { createEventDispatcher } from 'svelte';
     import type { TreeNodeData, Nip05VerificationStateType } from '$lib/types';
     import TreeNode from '$lib/components/TreeNode.svelte';
+    import AddItemModal from './AddItemModal.svelte';
 
     export let listHierarchy: TreeNodeData[] = [];
     export let nip05VerificationStates: { [id: string]: Nip05VerificationStateType } = {};
     export let isHierarchyLoading: boolean = true; // Pass loading state
     export let isLoadingInitialLists: boolean = true; // Pass loading state
 
-    const dispatch = createEventDispatcher();
+    let showAddItemModal = false;
+    let addItemParentId: string | null = null;
+
+    const dispatch = createEventDispatcher<{
+        viewprofile: { npub: string };
+        viewfeed: { listNodeId: string; listName: string };
+    }>();
 
     // Forward events from TreeNode
     function forwardEvent(event: any) {
         dispatch(event.type, event.detail);
+    }
+
+    function handleAddItemRequest(event: CustomEvent<{ parentId: string }>) {
+        addItemParentId = event.detail.parentId;
+        showAddItemModal = true;
+    }
+
+    // Forward viewprofile events from TreeNode
+    function forwardViewProfile(event: CustomEvent<{ npub: string }>) {
+        dispatch('viewprofile', event.detail);
+    }
+
+    // Forward viewfeed events from TreeNode
+    function forwardViewFeed(event: CustomEvent<{ listNodeId: string; listName: string }>) {
+        dispatch('viewfeed', event.detail);
     }
 
 </script>
@@ -34,9 +56,12 @@
                 verificationStates={nip05VerificationStates}
                 on:checknip05={forwardEvent}  
                 on:listchanged={forwardEvent} 
-                on:openadditem={forwardEvent} 
+                on:openadditem={handleAddItemRequest} 
                 on:openrenamemodal={forwardEvent}
-                on:viewprofile={forwardEvent} />
+                on:viewprofile={forwardViewProfile}
+                on:viewfeed={forwardViewFeed}
+                depth={0}
+                isRootNode={true} />
         {/each}
     </div>
 {:else}
@@ -46,4 +71,8 @@
              Try refreshing or checking relay connections.
          </p>
     </div>
+{/if}
+
+{#if showAddItemModal && addItemParentId}
+    <AddItemModal targetListId={addItemParentId} />
 {/if} 

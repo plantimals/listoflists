@@ -15,9 +15,9 @@ This document tracks the completion status of User Stories across different Epic
 - [x] CORE-STORY-007: Delete List
 - [ ] CORE-STORY-008: Reorder Items within List - *Decision: Won't Do (V1)*
 - [x] CORE-STORY-009: NIP-51 Compliance (Constraint) - *Note: Applies to implemented features.*
-- [ ] CORE-STORY-010: Add NIP-05 Item
-- [ ] CORE-STORY-011: Verify NIP-05 Item ("Sanity Check")
-- [ ] CORE-STORY-012: Update NIP-05 Item (Post-Verification)
+- [x] CORE-STORY-010: Add NIP-05 Item
+- [x] CORE-STORY-011: Verify NIP-05 Item ("Sanity Check")
+- [x] CORE-STORY-012: Update NIP-05 Item (Post-Verification)
 
 ---
 
@@ -60,8 +60,8 @@ This document tracks the completion status of User Stories across different Epic
 
 ## EPIC-DISCO-AGG: Content Discovery & Aggregation
 
-- [ ] DISCO-STORY-001: Discover Lists on Profile View
-- [ ] DISCO-STORY-002: Add Discovered List Link
+- [x] DISCO-STORY-001: Discover Lists on Profile View
+- [x] DISCO-STORY-002: Add Discovered List Link
 - [ ] DISCO-STORY-003: Aggregated Feed View
 
 ---

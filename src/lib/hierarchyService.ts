@@ -2,7 +2,7 @@ import type { TreeNodeData, ListItem } from '$lib/types';
 // Remove direct NDK dependency for fetching, only keep types if needed
 // import NDK, { type NDKEvent, type NDKFilter } from '@nostr-dev-kit/ndk';
 import { localDb, type StoredEvent } from '$lib/localDb'; // Import localDb and StoredEvent
-import type { NDKUserProfile } from '@nostr-dev-kit/ndk'; // Keep if profile type needed somewhere
+import { NDKKind, type NDKUserProfile } from '@nostr-dev-kit/ndk'; // Import NDKKind as value, NDKUserProfile as type
 
 // Helper function to check if a kind is parameterized replaceable
 function isParameterizedReplaceable(kind: number | undefined): boolean {
@@ -236,4 +236,95 @@ export async function buildHierarchy(
 
     // Filter out any null results
     return hierarchyNodes.filter((node): node is TreeNodeData => node !== null);
+} 
+
+/**
+ * Recursively aggregates content item identifiers ('e' tags and 'a' tags for non-list kinds)
+ * from a starting node and its descendants (including linked lists).
+ * @param startNode - The TreeNodeData to start aggregation from.
+ * @param collectedItems - A Set to store the unique item values (event IDs or naddrs).
+ * @param visitedNodes - A Set to track visited node IDs (coordinates/event IDs) to prevent cycles.
+ * @param currentDepth - The current recursion depth.
+ * @param maxDepth - The maximum recursion depth allowed.
+ */
+export async function aggregateContentItems(
+    startNode: TreeNodeData,
+    collectedItems: Set<string>, // Pass Set by reference to accumulate results
+    visitedNodes: Set<string>,   // Pass Set by reference for cycle detection
+    currentDepth: number = 0,
+    maxDepth: number = 5 // Default max depth
+): Promise<void> { // Returns void as it modifies the passed Set
+
+    // 1. Check Depth & Cycles
+    if (currentDepth > maxDepth) {
+        console.warn(`aggregateContentItems: Max depth (${maxDepth}) reached at node ${startNode.id}`);
+        return;
+    }
+    if (visitedNodes.has(startNode.id)) {
+        console.warn(`aggregateContentItems: Cycle detected at node ${startNode.id}. Skipping further recursion.`);
+        return;
+    }
+    visitedNodes.add(startNode.id);
+
+    console.log(`%caggregateContentItems: Processing node ${startNode.id} (Depth ${currentDepth})`, 'color: cyan;');
+
+    // 2. Process Items in the Current Node
+    for (const item of startNode.items) {
+        if (item.type === 'e') {
+            // Add non-replaceable event IDs
+            // TODO: Optional - Re-verify kind here if needed, though addItemToList should prevent replaceables
+            collectedItems.add(item.value); // Add event ID
+        } else if (item.type === 'a') {
+            // Add addressable items *if they are not lists*
+            const parts = item.value.split(':');
+            const kind = parseInt(parts[0], 10);
+            // Add 'a' tag value (coordinate) if it's NOT a known list kind we handle recursively
+            // Using NDKKind requires importing it
+            if (isNaN(kind) || (kind !== NDKKind.CategorizedPeopleList && kind !== NDKKind.CategorizedBookmarkList /* add other list kinds if needed */)) {
+                 collectedItems.add(item.value); // Add coordinate for non-list 'a' tags
+            }
+            // List kinds ('a' tags pointing TO lists) are handled below via recursion
+        }
+        // Ignore 'p' and 'nip05' types for content aggregation
+    }
+
+    // 3. Process Direct Children (nodes already in the hierarchy structure)
+    for (const childNode of startNode.children) {
+        await aggregateContentItems(childNode, collectedItems, visitedNodes, currentDepth + 1, maxDepth);
+    }
+
+    // 4. Process Linked Lists ('a' tags pointing TO lists)
+    const listLinks = startNode.items.filter(item => {
+        if (item.type !== 'a') return false;
+        const parts = item.value.split(':');
+        if (parts.length < 3) return false;
+        const kind = parseInt(parts[0], 10);
+        // Explicitly check for known list kinds we want to traverse
+        // Using NDKKind requires importing it
+        return !isNaN(kind) && (kind === NDKKind.CategorizedPeopleList || kind === NDKKind.CategorizedBookmarkList /* add others? */);
+    });
+
+    for (const linkItem of listLinks) {
+        const coord = linkItem.value;
+        const parts = coord.split(':');
+        const kind = parseInt(parts[0], 10);
+        const pubkey = parts[1];
+        const dTag = parts[2];
+
+        // Fetch the linked list event from local DB
+        const linkedListEvent = await localDb.getLatestEventByCoord(kind, pubkey, dTag);
+        if (linkedListEvent) {
+            // Transform the event into TreeNodeData structure
+            // Note: This transform only includes direct items, not nested children by itself.
+            const linkedListNode = transformStoredEventToNode(linkedListEvent);
+            // Recursively aggregate from the transformed linked list node
+            await aggregateContentItems(linkedListNode, collectedItems, visitedNodes, currentDepth + 1, maxDepth);
+        } else {
+             console.warn(`aggregateContentItems: Linked list event not found locally for coordinate ${coord} referenced in node ${startNode.id}`);
+        }
+    }
+
+    // 5. Remove node from visited set *after* processing its descendants
+    // (This allows revisiting the node via different paths if structure isn't a strict tree)
+     visitedNodes.delete(startNode.id);
 } 
