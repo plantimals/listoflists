@@ -67,6 +67,12 @@
   let nip05VerificationStates: { [identifier: string]: Nip05VerificationStateType } = {};
   // ------------------------------------
 
+  // +++ Derived User Lists +++
+  $: currentUserLists = $listHierarchy.map(node => ({ id: node.id, name: node.name })).filter(list => list.id && list.name);
+  // Simple map for now, assuming root nodes are the lists. Refine if needed.
+  // Added filter to ensure only lists with valid id/name are passed.
+  // --------------------------
+
   // Mock data for testing TreeNode with nesting
   // const mockNestedNodeData: TreeNodeData = { ... };
 
@@ -720,7 +726,7 @@
           &larr; Back to Lists
         </button>
       </div>
-      <ProfileView npub={viewingNpub} />
+      <ProfileView npub={viewingNpub} currentUserLists={currentUserLists} />
     {:else}
       <!-- List Hierarchy View -->
       <div class="divider">My Lists</div>

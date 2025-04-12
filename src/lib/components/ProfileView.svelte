@@ -5,8 +5,11 @@
   import { NDKKind, type NDKUserProfile, type NDKEvent, type NDKTag } from '@nostr-dev-kit/ndk';
   import { nip19 } from 'nostr-tools';
   import { Icon, ClipboardDocument } from 'svelte-hero-icons';
+  import SelectListModal from './SelectListModal.svelte';
+  import { addItemToList } from '$lib/listService';
 
   export let npub: string;
+  export let currentUserLists: Array<{ id: string, name: string }> = [];
 
   // Profile State
   let profileData: NDKUserProfile | null = null;
@@ -20,6 +23,13 @@
 
   // Derived State
   let hexPubkey: string | null = null;
+
+  // Add Link Modal State
+  let showSelectListModal = false;
+  let listToAddNaddr: string | null = null;
+  let isAddingLink = false;
+  let addLinkError: string | null = null;
+  let addLinkSuccessMessage: string | null = null;
 
   $: {
     try {
@@ -194,6 +204,69 @@
       }
   }
 
+  // Add the new handler function
+  function handleAddLinkClick(naddr: string) {
+      console.log(`ProfileView: Add Link clicked for naddr: ${naddr}`);
+      listToAddNaddr = naddr;
+      addLinkError = null; // Clear previous errors
+      addLinkSuccessMessage = null; // <-- Clear previous success message
+      showSelectListModal = true; // Set flag to show the modal
+      // The reactive binding in the SelectListModal component should handle opening it
+  }
+
+  // Handler for when the modal confirms a selection
+  async function handleListSelected(event: CustomEvent<{ destinationListId: string }>) {
+      const { destinationListId } = event.detail;
+      console.log(`ProfileView: Received listselected event for destination ID: ${destinationListId}`);
+
+      if (!listToAddNaddr || !destinationListId) {
+          addLinkError = 'Error: Missing information to add the link.';
+          addLinkSuccessMessage = null; // Ensure success is null on early exit
+          console.error(addLinkError, { listToAddNaddr, destinationListId });
+          return;
+      }
+
+      isAddingLink = true; // Set loading state for the overall add link process
+      addLinkError = null;
+      addLinkSuccessMessage = null; // Clear messages at start of attempt
+
+      try {
+          console.log(`ProfileView: Calling addItemToList - Destination: ${destinationListId}, Item naddr: ${listToAddNaddr}`);
+          // Call the existing list service function
+          const result = await addItemToList(destinationListId, listToAddNaddr);
+
+          if (result.success) {
+              console.log(`ProfileView: Successfully added link ${listToAddNaddr} to list ${destinationListId}. New event ID: ${result.newEventId}`);
+
+              // Find the destination list name for the message
+              const destinationListName = currentUserLists.find(l => l.id === destinationListId)?.name || destinationListId;
+
+              addLinkSuccessMessage = `Link added to list '${destinationListName}'!`; // Set success message
+              addLinkError = null; // Explicitly clear error on success
+
+              // Clear the message after a delay
+              setTimeout(() => {
+                  addLinkSuccessMessage = null;
+              }, 3000); // Display for 3 seconds
+
+          } else {
+              console.error(`ProfileView: Failed to add link ${listToAddNaddr} to list ${destinationListId}:`, result.error);
+              addLinkError = result.error || 'Failed to add link to the selected list.';
+              addLinkSuccessMessage = null; // Ensure success message is clear on error
+          }
+      } catch (err: any) {
+          console.error('ProfileView: Unexpected error in handleListSelected:', err);
+          addLinkError = `An unexpected error occurred: ${err.message}`;
+          addLinkSuccessMessage = null; // Clear success message on catch
+      } finally {
+          isAddingLink = false;
+          // We keep listToAddNaddr set so the spinner on the specific button remains
+          // until the user interacts elsewhere or the component re-renders.
+          // Consider resetting listToAddNaddr = null here or perhaps after a short delay
+          // or when the modal fully closes.
+      }
+  }
+
   onMount(() => {
     // Initial fetch is triggered by the reactive block `$: { ... }` after npub is decoded
   });
@@ -248,54 +321,66 @@
       {/if}
     </div>
 
-    <!-- Public Lists -->
-    <div class="space-y-2">
-      <h3 class="text-lg font-semibold">Public Lists</h3>
-      <div class="card card-bordered bg-base-200 p-4 min-h-20">
-        {#if isLoadingLists}
-          <div class="flex items-center justify-center space-x-2 text-sm">
-            <span class="loading loading-spinner loading-xs"></span>
-            <span>Loading lists...</span>
-          </div>
-        {:else if listError}
-          <div class="alert alert-warning alert-sm py-2 px-3 text-xs">
-             <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-4 w-4" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-            <span>{listError}</span>
-          </div>
-        {:else if publicLists.length > 0}
-          <!-- Display Found Lists -->
-          <div class="space-y-1">
-            {#each publicLists as list (list.naddr)}
-              <div class="flex items-center justify-between p-2 rounded hover:bg-base-300/50">
-                <span class="font-medium text-sm flex-grow truncate mr-2" title={list.name}>
-                  {list.name} <span class="text-xs text-base-content/60">(Kind: {list.kind})</span>
-                </span>
-                <div class="flex items-center flex-shrink-0 gap-1 ml-2">
-                  <button
-                    class="btn btn-xs btn-outline btn-primary"
-                    on:click={() => console.log('Add Link clicked for list:', list.name, list.naddr)}
-                    title={`Add link to list: ${list.name}`}
-                  >
-                    Add Link
-                  </button>
-                  <button
-                    class="btn btn-xs btn-ghost"
-                    title="Copy naddr"
-                    on:click={() => copyNaddr(list.naddr)}
-                  >
-                    <Icon src={ClipboardDocument} class="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <!-- No Lists Found -->
-          <p class="text-base-content/60 italic text-sm text-center py-4">
-            No public lists (Kind 30001 or 30003) found for this user.
-          </p>
-        {/if}
+    <!-- Display Add Link Success Message -->
+    {#if addLinkSuccessMessage}
+      <div class="alert alert-success mt-4">
+        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        <span>{addLinkSuccessMessage}</span>
       </div>
+    {/if}
+
+    <!-- Display Add Link Error -->
+    {#if addLinkError}
+      <div class="alert alert-error mt-4">
+        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2 2m2-2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        <span>Error adding link: {addLinkError}</span>
+      </div>
+    {/if}
+
+    <!-- Public Lists -->
+    <div class="card card-bordered bg-base-100 p-4 space-y-2">
+      <h3 class="font-semibold text-lg border-b border-base-300 pb-1 mb-2">Public Lists</h3>
+      {#if isLoadingLists}
+        <div class="flex items-center justify-center space-x-2 py-4">
+          <span class="loading loading-spinner text-primary"></span>
+          <span>Loading Lists...</span>
+        </div>
+      {:else if listError}
+        <div class="alert alert-warning text-sm p-2">
+          <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          <span>Could not load lists: {listError}</span>
+        </div>
+      {:else if publicLists.length > 0}
+        <ul class="space-y-1">
+          {#each publicLists as list (list.naddr)}
+            <li class="flex items-center justify-between p-2 rounded hover:bg-base-200/50">
+              <span class="truncate mr-2" title={list.name}>{list.name} <span class="text-xs opacity-60">(Kind {list.kind})</span></span>
+              <div class="flex items-center space-x-1 flex-shrink-0">
+                 <button
+                    class="btn btn-xs btn-ghost btn-square"
+                    on:click={() => copyNaddr(list.naddr)}
+                    title="Copy List Address (naddr)">
+                    <Icon src={ClipboardDocument} class="w-4 h-4"/>
+                 </button>
+                 <button
+                    class="btn btn-xs btn-outline btn-primary"
+                    on:click={() => handleAddLinkClick(list.naddr)}
+                    title={`Add link to list: ${list.name}`}
+                    disabled={isAddingLink}
+                 >
+                    {#if isAddingLink && listToAddNaddr === list.naddr}
+                       <span class="loading loading-spinner loading-xs"></span>
+                    {:else}
+                       Add Link
+                    {/if}
+                 </button>
+              </div>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="text-base-content/70 italic">No public lists found for this user.</p>
+      {/if}
     </div>
   </div>
 {:else}
@@ -307,4 +392,7 @@
        <span class="text-sm mt-1">List Check: {listError}</span>
     {/if}
   </div>
-{/if} 
+{/if}
+
+<!-- Add the Modal Instance -->
+<SelectListModal bind:open={showSelectListModal} userLists={currentUserLists} on:listselected={handleListSelected} /> 

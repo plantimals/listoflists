@@ -3,16 +3,17 @@
   import UserItem from '$lib/components/UserItem.svelte';
   import NoteItem from '$lib/components/NoteItem.svelte';
   import Nip05Item from '$lib/components/Nip05Item.svelte'; // Import the new component
+  import AddressableItem from '$lib/components/AddressableItem.svelte'; // <-- Import this
   import { localDb, type StoredEvent } from '$lib/localDb';
   import { ndkService } from '$lib/ndkService';
   import { NDKEvent } from '@nostr-dev-kit/ndk';
   import { refreshTrigger } from '$lib/refreshStore';
   import { createEventDispatcher } from 'svelte'; // Removed CustomEvent import
+  import { isOnline } from '$lib/networkStatusStore'; // <-- Import isOnline store
 
   export let item: ListItem;
   export let listId: string; // The ID (coordinate or event ID) of the parent list
   export let listPubkey: string; // The pubkey of the parent list owner
-  export let isOnline: boolean;
 
   let isRemovingItem: boolean = false; // Moved state from TreeNode
   let itemErrorMessage: string | null = null; // Local error message state
@@ -98,15 +99,17 @@
     {:else if item.type === 'e'}
         <NoteItem eventId={item.value} />
     {:else if item.type === 'nip05'}
-        <Nip05Item identifier={item.value} pubkey={item.pubkey ?? ''} />
+        <Nip05Item item={item} listId={listId} isOnline={$isOnline} />
+    {:else if item.type === 'a'}
+        <AddressableItem coordinate={item.value} isOnline={$isOnline} />
     {/if}
 
     <!-- Remove Item Button -->
     <button
         class="btn btn-xs btn-ghost text-error ml-auto mr-1"
         on:click={handleRemoveItem}
-        disabled={isRemovingItem || !isOnline}
-        title={!isOnline ? 'Cannot remove item while offline' : (isRemovingItem ? 'Removing...' : 'Remove item')}
+        disabled={isRemovingItem || !$isOnline}
+        title={!$isOnline ? 'Cannot remove item while offline' : (isRemovingItem ? 'Removing...' : 'Remove item')}
     >
         {#if isRemovingItem}
             <span class="loading loading-spinner loading-xs"></span>
