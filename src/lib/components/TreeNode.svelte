@@ -19,11 +19,13 @@
     import { NDKEvent } from '@nostr-dev-kit/ndk'; // Re-added for removeListFromParent
     import { nip19 } from 'nostr-tools'; // Import nip19
     import { isOnline } from '$lib/networkStatusStore'; // <-- Ensure isOnline is imported
+    import type { Nip05VerificationStateType } from '$lib/types'; // <-- Import the type from $lib/types
     // Import Icon component and the specific icon definition
     // import { Icon, PencilSquare, Trash } from 'svelte-hero-icons';
 
     export let node: TreeNodeData;
     export let level: number = 0;
+    export let verificationStates: { [id: string]: Nip05VerificationStateType }; // <-- Use the imported type
 
     let expanded: boolean = false; // State for expand/collapse
     let isAdding: boolean = false;
@@ -187,7 +189,12 @@
 
 <!-- Render Items using NodeItemsList when Expanded -->
 {#if expanded && node.items && node.items.length > 0}
-    <NodeItemsList {node} {level} />
+    <NodeItemsList 
+      {node} 
+      {level} 
+      {verificationStates} 
+      on:checknip05
+    /> 
 {/if}
 
 
@@ -196,8 +203,10 @@
   <div class="mt-1" style="margin-left: 0;"> <!-- Adjust margin if needed, or keep consistent -->
     {#each node.children as childNode (childNode.id)}
       <svelte:self 
+          {...$$props}
           node={childNode} 
           level={level + 1} 
+          verificationStates={verificationStates}
           on:listchanged 
           on:openadditem 
           on:openrenamemodal

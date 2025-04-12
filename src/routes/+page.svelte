@@ -11,7 +11,7 @@
   // Separate NDK imports: Default and Named
   import { NDKEvent, type NDKUser, type NDKUserProfile, type NDKFilter, NDKNip07Signer, type NDKSigner, type NDKList, NDKKind } from '@nostr-dev-kit/ndk';
   import TreeNode from '$lib/components/TreeNode.svelte'; // Import the new component
-  import type { TreeNodeData } from '$lib/types'; // Import the type
+  import type { TreeNodeData, Nip05VerificationStateType } from '$lib/types'; // Import types including the new one
   import { localDb, type StoredEvent } from '$lib/localDb'; // Import localDb AND StoredEvent type
   import CreateListModal from '$lib/components/CreateListModal.svelte'; // Import the modal component
   import { browser } from '$app/environment'; // Import browser
@@ -21,6 +21,8 @@
   import AddItemModal from '$lib/components/AddItemModal.svelte'; // Import the Add Item modal
   import RenameListModal from '$lib/components/RenameListModal.svelte'; // <-- Import RenameListModal
   import { syncService } from '$lib/syncService'; // <-- IMPORT syncService
+  import { nip05 } from 'nostr-tools'; // <-- Import nip05
+  import HierarchyWrapper from '$lib/components/HierarchyWrapper.svelte'; // <-- Import wrapper
 
   let isLoadingProfile: boolean = false;
   let isLoadingInitialLists: boolean = false; // Initial load from local + potentially network
@@ -45,6 +47,10 @@
   let error: string | null = null; // Store for error messages
 
   let createListModalInstance: CreateListModal; // Instance binding
+
+  // +++ NIP-05 Verification State Map (using imported type) +++
+  let nip05VerificationStates: { [identifier: string]: Nip05VerificationStateType } = {};
+  // ------------------------------------
 
   // Mock data for testing TreeNode with nesting
   // const mockNestedNodeData: TreeNodeData = { ... };
@@ -86,6 +92,7 @@
           isSyncing = false;
           isInitialSyncing = false;
           lastLoadedPubkey = null; // Reset guard on new user login
+          nip05VerificationStates = {}; // <-- Reset verification state on login
       }
       user.set(loggedInUser); // This triggers reactive blocks
     } catch (error) {
@@ -478,6 +485,44 @@
       }
   }
 
+  // +++ NIP-05 Check Handler +++
+  async function handleCheckNip05(event: CustomEvent<{ identifier: string; cachedNpub: string; listId: string }>) {
+    const { identifier, cachedNpub } = event.detail;
+    console.log(`Received checknip05 event for: ${identifier} (Cached: ${cachedNpub ? cachedNpub.substring(0,6) : 'none'})`);
+
+    // 1. Update state to 'checking'
+    nip05VerificationStates[identifier] = { status: 'checking', newlyResolvedNpub: null, errorMsg: null };
+    nip05VerificationStates = { ...nip05VerificationStates }; // Trigger reactivity
+
+    try {
+      // 2. Perform NIP-05 Query
+      const resolvedProfile = await nip05.queryProfile(identifier);
+
+      if (resolvedProfile && resolvedProfile.pubkey) {
+        // 3a. Compare resolved pubkey with cached pubkey
+        if (resolvedProfile.pubkey === cachedNpub) {
+          console.log(`NIP-05 Match: ${identifier} -> ${resolvedProfile.pubkey.substring(0,6)}`);
+          nip05VerificationStates[identifier] = { status: 'match', newlyResolvedNpub: null, errorMsg: null };
+        } else {
+          console.log(`NIP-05 Mismatch: ${identifier} resolved to ${resolvedProfile.pubkey.substring(0,6)}, expected ${cachedNpub ? cachedNpub.substring(0,6) : 'none'}`);
+          nip05VerificationStates[identifier] = { status: 'mismatch', newlyResolvedNpub: resolvedProfile.pubkey, errorMsg: null };
+        }
+      } else {
+        // 3b. Resolution failed (no profile or no pubkey)
+        console.warn(`NIP-05 Resolution failed for: ${identifier}`);
+        nip05VerificationStates[identifier] = { status: 'failed', newlyResolvedNpub: null, errorMsg: "NIP-05 resolution failed or profile has no pubkey." };
+      }
+    } catch (error: any) {
+      // 3c. Error during resolution
+      console.error(`Error during NIP-05 resolution for ${identifier}:`, error);
+      nip05VerificationStates[identifier] = { status: 'failed', newlyResolvedNpub: null, errorMsg: error.message || "An unexpected error occurred." };
+    }
+
+    // 4. Update state again to trigger reactivity with the final result
+    nip05VerificationStates = { ...nip05VerificationStates };
+  }
+  // -----------------------------
+
   onMount(() => {
     // Initial load
     const currentPubkey = get(user)?.pubkey;
@@ -564,64 +609,44 @@
 
     <!-- Hierarchy Display Section -->
     <div class="p-4 border border-base-300 rounded-lg bg-base-100/50 min-h-[200px]">
-        {#if $isHierarchyLoading || isLoadingInitialLists } <!-- Check both flags -->
-            {@const logState = console.log('TEMPLATE CHECK (loading): isLoading?', $isHierarchyLoading || isLoadingInitialLists, 'Hierarchy Length:', $listHierarchy.length)}
-            {@const logLoading = console.log('TEMPLATE RENDERING: Loading state')}
-            <div class="flex justify-center items-center h-full">
-                <span class="loading loading-lg loading-spinner text-primary"></span>
-                 <!-- Show specific message based on which phase is active -->
-                 {#if isLoadingInitialLists}
-                    <span class="ml-4 text-lg italic">Fetching lists from network...</span>
-                 {:else}
-                    <span class="ml-4 text-lg italic">Building hierarchy from local data...</span>
-                 {/if}
-            </div>
-        {:else if $listHierarchy.length > 0}
-             {@const logState = console.log('TEMPLATE CHECK (hierarchy): isLoading?', $isHierarchyLoading || isLoadingInitialLists, 'Hierarchy Length:', $listHierarchy.length)}
-             {@const logHierarchy = console.log('TEMPLATE RENDERING: Hierarchy block')}
-            <div class="mt-4 space-y-2 overflow-auto" style="max-height: 70vh;">
-                {#each $listHierarchy as rootNode (rootNode.id)}
-                    <TreeNode node={rootNode} on:listchanged={handleListChanged} on:openadditem={handleOpenAddItem} on:openrenamemodal={handleOpenRenameModal} />
-                {/each}
-            </div>
-        {:else} <!-- Only show 'no lists' if *not* loading -->
-            {@const logState = console.log('TEMPLATE CHECK (empty): isLoading?', $isHierarchyLoading || isLoadingInitialLists, 'Hierarchy Length:', $listHierarchy.length)}
-            {@const logEmpty = console.log('TEMPLATE RENDERING: No lists state')}
-            <div class="flex justify-center items-center h-full">
-                 <p class="text-lg text-base-content/70 italic">
-                    (No lists found locally or hierarchy failed to build).
-                     Try refreshing or checking relay connections.
-                 </p>
-            </div>
-        {/if}
+        
+        <!-- Action Buttons Area (Moved Inside and Above Wrapper) -->
+        <div class="mb-4 flex items-center gap-2"> 
+            <div class="flex-grow"></div> <!-- Spacer to push buttons right -->
+            <button class="btn btn-primary btn-sm" on:click={() => (window as any).create_list_modal.showModal()}>
+              Create New List
+            </button>
+            <button
+                class="btn btn-secondary btn-sm"
+                on:click={() => handleSync({ isInitialSync: false })}
+                disabled={isSyncing || $isHierarchyLoading || isLoadingInitialLists || isInitialSyncing || !$isOnline || !$user}
+                title={$isOnline ? (isSyncing || $isHierarchyLoading || isLoadingInitialLists || isInitialSyncing ? 'Action unavailable while loading/syncing' : (!$user ? 'Login required' : 'Fetch latest lists from relays')) : 'Sync unavailable while offline'}
+            >
+              {#if isSyncing}
+                <span class="loading loading-spinner loading-xs"></span>
+                Syncing...
+              {:else if $isHierarchyLoading || isLoadingInitialLists}
+                 <span class="loading loading-spinner loading-xs"></span> 
+                 Loading...
+              {:else}
+                Sync from Relays
+              {/if}
+            </button>
+        </div>
+        <!-- End Action Buttons Area -->
+        
+        <HierarchyWrapper 
+            listHierarchy={$listHierarchy} 
+            {nip05VerificationStates} 
+            isHierarchyLoading={$isHierarchyLoading} 
+            {isLoadingInitialLists} 
+            on:checknip05={handleCheckNip05} 
+            on:listchanged={handleListChanged} 
+            on:openadditem={handleOpenAddItem} 
+            on:openrenamemodal={handleOpenRenameModal} 
+        />
     </div>
     <!-- ===== END: List Hierarchy Section ===== -->
-
-    <!-- Action Buttons Area -->
-    <div class="mt-4 flex items-center gap-2">
-        <h2 class="text-xl font-semibold flex-grow">My Lists</h2>
-        <!-- Add Create List Button -->
-        <button class="btn btn-primary btn-sm" on:click={() => (window as any).create_list_modal.showModal()}>
-          Create New List
-        </button>
-        <!-- Existing Sync Button -->
-        <button
-            class="btn btn-secondary btn-sm"
-            on:click={() => handleSync({ isInitialSync: false })}
-            disabled={isSyncing || $isHierarchyLoading || isLoadingInitialLists || isInitialSyncing || !$isOnline || !$user}
-            title={$isOnline ? (isSyncing || $isHierarchyLoading || isLoadingInitialLists || isInitialSyncing ? 'Action unavailable while loading/syncing' : (!$user ? 'Login required' : 'Fetch latest lists from relays')) : 'Sync unavailable while offline'}
-        >
-          {#if isSyncing}
-            <span class="loading loading-spinner loading-xs"></span>
-            Syncing...
-          {:else if $isHierarchyLoading || isLoadingInitialLists}
-             <span class="loading loading-spinner loading-xs"></span> <!-- Optional: show spinner during initial load too -->
-             Loading...
-          {:else}
-            Sync from Relays
-          {/if}
-        </button>
-    </div>
 
   {:else}
     <!-- Logged Out State - Using DaisyUI -->
@@ -633,4 +658,6 @@
         </button>
     </div>
   {/if}
+
+  <!-- End Modals -->
 </div>

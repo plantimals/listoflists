@@ -36,21 +36,36 @@ export function transformStoredEventToNode(event: StoredEvent): TreeNodeData {
     const itemCount = event.tags.filter(t => ['p', 'e', 'a', 'nip05'].includes(t[0])).length;
 
     // Extract 'p', 'e', 'a', and 'nip05' tags specifically for the items list
-    const items: Array<ListItem> = event.tags
-        .filter(t => t[0] === 'p' || t[0] === 'e' || t[0] === 'a' || t[0] === 'nip05') 
-        .map(t => {
-            const baseItem = {
-                type: t[0] as 'p' | 'e' | 'a' | 'nip05', // Cast type
-                value: t[1],
-                relayHint: (t[0] === 'e' || t[0] === 'a') ? t[2] : undefined, // Capture relay hint only if relevant
-            };
-            // If it's a nip05 tag, add the pubkey (assuming it's the 3rd element)
-            if (baseItem.type === 'nip05' && t[2]) {
-                 return { ...baseItem, pubkey: t[2] };
+    const items: ListItem[] = event.tags
+        .filter(t => ['p', 'e', 'a', 'nip05'].includes(t[0])) 
+        .map((t): ListItem | null => {
+            const tagType = t[0];
+            const tagValue = t[1];
+            const tagParam1 = t[2]; // Could be relay hint or cached npub
+
+            if (tagType === 'nip05') {
+                if (tagValue && tagParam1) {
+                    return { 
+                        type: 'nip05',
+                        identifier: tagValue,
+                        cachedNpub: tagParam1, 
+                        value: tagValue // Use identifier as value for keying
+                    } as ListItem;
+                } else {
+                    console.warn(`Skipping invalid nip05 tag in event ${event.id}:`, t);
+                    return null; // Skip invalid nip05 tags
+                }
+            } else if (tagType === 'p' || tagType === 'e' || tagType === 'a') {
+                return {
+                    type: tagType,
+                    value: tagValue,
+                    relayHint: (tagType === 'e' || tagType === 'a') ? tagParam1 : undefined
+                } as ListItem;
             } else {
-                return baseItem;
+                 return null; // Should not happen due to filter, but defensively return null
             }
-        });
+        })
+        .filter((item): item is ListItem => item !== null); // Type predicate should work now
 
     // Construct and return the TreeNodeData object.
     return {

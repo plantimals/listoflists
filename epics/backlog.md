@@ -7,6 +7,6 @@ This file lists user stories that are not yet completed, extracted from `epics/p
 - [x] CORE-STORY-005: Rename List
 - [x] CORE-STORY-007: Delete List
 - [ ] CORE-STORY-009: NIP-51 Compliance (Constraint)
-- [ ] CORE-STORY-010: Add NIP-05 Item
+- [x] CORE-STORY-010: Add NIP-05 Item
 - [ ] CORE-STORY-011: Verify NIP-05 Item ("Sanity Check")
 - [ ] CORE-STORY-012: Update NIP-05 Item (Post-Verification)

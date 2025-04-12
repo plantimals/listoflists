@@ -1,12 +1,9 @@
 /**
  * Represents a single item within a list (e.g., a profile or event pointer).
  */
-export type ListItem = { 
-    type: 'p' | 'e' | 'a' | 'nip05'; // Added 'nip05' and restored 'a' for completeness
-    value: string; // For p=pubkey, e=eventid, a=coordinate, nip05=identifier
-    relayHint?: string; // Optional relay hint (e.g., for 'e', 'a')
-    pubkey?: string; // Optional pubkey (e.g., for 'nip05')
-};
+export type ListItem = 
+  | { type: 'p' | 'e' | 'a', value: string, relayHint?: string } 
+  | { type: 'nip05', identifier: string, cachedNpub: string, value: string /* Assign identifier to value for keying */ };
 
 /**
  * Represents the data structure for a single node in the list hierarchy tree.
@@ -22,4 +19,13 @@ export interface TreeNodeData {
     // Add other NDKEvent properties if needed for display or logic later
     eventId: string; // The actual Nostr event ID of the list version being displayed
     pubkey: string; // Author pubkey of the list event
+} 
+
+/**
+ * Represents the state of a NIP-05 verification process for a specific identifier.
+ */
+export type Nip05VerificationStateType = { 
+  status: 'idle' | 'checking' | 'match' | 'mismatch' | 'failed';
+  newlyResolvedNpub: string | null;
+  errorMsg: string | null;
 } 
