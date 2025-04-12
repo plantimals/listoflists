@@ -6,6 +6,8 @@
     import { localDb, type StoredEvent } from '$lib/localDb';
     import type { NDKUserProfile, NDKEvent } from '@nostr-dev-kit/ndk';
     import { nip19 } from 'nostr-tools'; // Import nip19
+    // import { profileStore } from '$lib/stores/ProfileStore'; // Keep commented/removed if causing issues
+    // import { derived } from 'svelte/store'; // Keep commented/removed if causing issues
 
     /**
      * The public key (hex) of the user to display.
@@ -25,8 +27,8 @@
 
     function handleClick() {
         if (npub) {
-            console.log(`UserItem: Dispatching viewprofile for npub: ${npub}`);
-            dispatch('viewprofile', { npub: npub });
+            console.log(`UserItem: Dispatching viewprofile for npub: ${npub}`); // Keep log for confirmation
+            dispatch('viewprofile', { npub: npub }); // Dispatch the event
         } else {
             console.error('UserItem: Cannot dispatch viewprofile, invalid pubkey/npub.');
         }
@@ -112,7 +114,10 @@
     });
 </script>
 
-<div class="py-1 flex items-center space-x-2 cursor-pointer hover:bg-base-200 rounded px-1" on:click={handleClick}>
+<div
+	class="p-2 hover:bg-base-200 cursor-pointer flex items-center space-x-2"
+	on:click={handleClick}
+>
     {#if isLoading}
         <span class="loading loading-spinner loading-xs"></span>
         <span class="text-xs italic text-base-content/50">Loading profile...</span>

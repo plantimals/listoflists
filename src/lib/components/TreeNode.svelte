@@ -13,7 +13,7 @@
     // Removed removeItemFromList import
     import * as listService from '$lib/listService'; // Import listService namespace
     // import AddItemModal from './AddItemModal.svelte'; // Import the modal - Removed
-    import { createEventDispatcher } from 'svelte'; // Import dispatcher
+    import { createEventDispatcher, onMount, onDestroy } from 'svelte'; // Import dispatcher and lifecycle functions
     import { localDb, type StoredEvent } from '$lib/localDb'; // Re-added for removeListFromParent
     import { ndkService } from '$lib/ndkService'; // Re-added for removeListFromParent
     import { NDKEvent } from '@nostr-dev-kit/ndk'; // Re-added for removeListFromParent
@@ -194,6 +194,7 @@
       {level} 
       {verificationStates} 
       on:checknip05
+      on:viewprofile={(event) => dispatch('viewprofile', event.detail)}
     /> 
 {/if}
 
@@ -210,7 +211,8 @@
           on:listchanged 
           on:openadditem 
           on:openrenamemodal
-          />
+          on:viewprofile
+      />
     {/each}
   </div>
 {/if}

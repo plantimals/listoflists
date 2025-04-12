@@ -7,7 +7,7 @@
   import { ndkService } from '$lib/ndkService';
   import { NDKEvent } from '@nostr-dev-kit/ndk';
   import { refreshTrigger } from '$lib/refreshStore';
-  import { createEventDispatcher } from 'svelte'; // May need if dispatching errors/events up
+  import { createEventDispatcher } from 'svelte'; // Removed CustomEvent import
 
   export let item: ListItem;
   export let listId: string; // The ID (coordinate or event ID) of the parent list
@@ -94,7 +94,7 @@
 <div class="flex items-center py-1 hover:bg-base-300 rounded text-sm">
     <!-- Item Display Logic -->
     {#if item.type === 'p'}
-        <UserItem pubkey={item.value} />
+        <UserItem pubkey={item.value} on:viewprofile={(event) => dispatch('viewprofile', event.detail)} />
     {:else if item.type === 'e'}
         <NoteItem eventId={item.value} />
     {:else if item.type === 'nip05'}

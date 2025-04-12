@@ -35,7 +35,8 @@
                 on:checknip05={forwardEvent}  
                 on:listchanged={forwardEvent} 
                 on:openadditem={forwardEvent} 
-                on:openrenamemodal={forwardEvent} />
+                on:openrenamemodal={forwardEvent}
+                on:viewprofile={forwardEvent} />
         {/each}
     </div>
 {:else}

@@ -5,13 +5,20 @@
   import Nip05Item from './Nip05Item.svelte'; // <-- Import the new component
   import { isOnline } from '$lib/networkStatusStore'; // Import the store
   import type { Nip05VerificationStateType } from '$lib/types'; // <-- Import the type from $lib/types
+  import { createEventDispatcher } from 'svelte';
 
   // Add props as needed, starting with node for components that need it directly
   export let node: TreeNodeData; // Example: uncomment if needed
   export let level: number; // Pass level down for correct padding
   export let verificationStates: { [id: string]: Nip05VerificationStateType }; // <-- Add prop
 
-  console.log('Component initialized:', 'NodeItemsList');
+  const dispatch = createEventDispatcher();
+
+  console.log('Component initialized:', 'NodeItemsList', node);
+
+  // Remove the incorrect reactive declarations
+  // $: listId = node.listEvent?.id ?? 'unknown-list-id';
+  // $: listPubkey = node.listEvent?.pubkey ?? 'unknown-pubkey';
 </script>
 
 <!-- Render Items when Expanded (logic moved from TreeNode) -->
@@ -24,6 +31,7 @@
                   listId={node.eventId}
                   listPubkey={node.pubkey}
                   isOnline={$isOnline}
+                  on:viewprofile={(event) => dispatch('viewprofile', event.detail)}
                   />
         {:else if item.type === 'nip05'}
           <!-- Handle NIP05 items with the new component -->

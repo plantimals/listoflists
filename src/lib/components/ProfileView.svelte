@@ -4,6 +4,7 @@
   import { ndkService } from '$lib/ndkService';
   import { NDKKind, type NDKUserProfile, type NDKEvent, type NDKTag } from '@nostr-dev-kit/ndk';
   import { nip19 } from 'nostr-tools';
+  import { Icon, ClipboardDocument } from 'svelte-hero-icons';
 
   export let npub: string;
 
@@ -69,7 +70,7 @@
         console.log(`ProfileView: Found profile locally for ${hexPubkey}`);
         profileData = localProfile.profile as NDKUserProfile;
         // Proceed to fetch lists after successful profile load
-        fetchPublicLists(); 
+        fetchPublicLists();
       } else {
         // 2. Network Fetch
         console.log(`ProfileView: Profile not found locally for ${hexPubkey}, fetching from network...`);
@@ -95,7 +96,7 @@
             await localDb.addOrUpdateProfile(storedEventData);
             console.log(`ProfileView: Saved fetched profile to local DB for ${hexPubkey}`);
             // Proceed to fetch lists after successful profile load and save
-            fetchPublicLists(); 
+            fetchPublicLists();
           } catch (parseError) {
             console.error(`ProfileView: Failed to parse profile content for ${hexPubkey}:`, parseError);
             profileError = 'Failed to parse profile data from network.';
@@ -176,6 +177,23 @@
     }
   }
 
+  // Add the copyNaddr function
+  async function copyNaddr(naddr: string) {
+      if (!navigator.clipboard) {
+          console.error('Clipboard API not available');
+          // Optionally show an error message to the user
+          return;
+      }
+      try {
+          await navigator.clipboard.writeText(naddr);
+          console.log('Copied naddr to clipboard:', naddr);
+          // Optional: Add brief visual feedback (e.g., change button text/icon temporarily)
+      } catch (err) {
+          console.error('Failed to copy naddr:', err);
+          // Optionally show an error message to the user
+      }
+  }
+
   onMount(() => {
     // Initial fetch is triggered by the reactive block `$: { ... }` after npub is decoded
   });
@@ -203,14 +221,20 @@
     <!-- Profile Details -->
     <div class="card card-bordered bg-base-200 p-4 space-y-2">
       <div class="flex items-center space-x-4">
-        <div class="avatar placeholder">
-          {#if profileData.image}
-            <div class="bg-neutral text-neutral-content rounded-full w-16 ring ring-primary ring-offset-base-100 ring-offset-2">
-              <img src={profileData.image} alt={profileData.displayName || profileData.name || 'avatar'} />
+        <div class="avatar">
+          {#if profileData.picture}
+            {@const _ = console.log('Avatar URL:', profileData.picture)}
+            <div class="w-16 rounded-full ring ring-primary ring-offset-base-100 ring-offset-2">
+              <img
+                src={profileData.picture}
+                alt={profileData.displayName || profileData.name || 'User Avatar'}
+                class="rounded-full" />
             </div>
           {:else}
-            <div class="bg-neutral text-neutral-content rounded-full w-16 ring ring-primary ring-offset-base-100 ring-offset-2">
-              <span class="text-xl">{(profileData.displayName || profileData.name || '?').charAt(0).toUpperCase()}</span>
+            <div class="avatar placeholder">
+              <div class="bg-neutral text-neutral-content rounded-full w-16 ring ring-primary ring-offset-base-100 ring-offset-2">
+                <span class="text-xl">{(profileData.displayName || profileData.name || '?').charAt(0).toUpperCase()}</span>
+              </div>
             </div>
           {/if}
         </div>
@@ -243,18 +267,25 @@
           <div class="space-y-1">
             {#each publicLists as list (list.naddr)}
               <div class="flex items-center justify-between p-2 rounded hover:bg-base-300/50">
-                <div>
-                  <span class="font-medium text-sm">{list.name}</span>
-                  <code class="block text-xs text-base-content/60 truncate" title={list.naddr}>
-                    ({list.kind}) {list.naddr}
-                  </code>
+                <span class="font-medium text-sm flex-grow truncate mr-2" title={list.name}>
+                  {list.name} <span class="text-xs text-base-content/60">(Kind: {list.kind})</span>
+                </span>
+                <div class="flex items-center flex-shrink-0 gap-1 ml-2">
+                  <button
+                    class="btn btn-xs btn-outline btn-primary"
+                    on:click={() => console.log('Add Link clicked for list:', list.name, list.naddr)}
+                    title={`Add link to list: ${list.name}`}
+                  >
+                    Add Link
+                  </button>
+                  <button
+                    class="btn btn-xs btn-ghost"
+                    title="Copy naddr"
+                    on:click={() => copyNaddr(list.naddr)}
+                  >
+                    <Icon src={ClipboardDocument} class="w-4 h-4" />
+                  </button>
                 </div>
-                <button 
-                  class="btn btn-xs btn-outline btn-primary ml-2" 
-                  on:click={() => console.log('Add Link clicked for list:', list.name, list.naddr)}
-                >
-                  Add Link
-                </button>
               </div>
             {/each}
           </div>
