@@ -31,7 +31,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4 # Update v2 -> v4 (or check latest stable)
         with:
-          version: 8
+          version: 10
 
       - name: Install Node.js
         uses: actions/setup-node@v4 # Update v3 -> v4
