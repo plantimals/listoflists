@@ -26,34 +26,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # Update v3 -> v4
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v2
+        uses: pnpm/action-setup@v4 # Update v2 -> v4 (or check latest stable)
         with:
           version: 8
 
       - name: Install Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4 # Update v3 -> v4
         with:
           node-version: 22
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Setup Pages
-        uses: actions/configure-pages@v3
-        with:
-          static_site_generator: sveltekit
+        uses: actions/configure-pages@v5 # Update v3 -> v5
 
       - name: Build
         run: pnpm run build
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4 # Keep v4 (was updated previously)
         with:
-          # this should match the `pages` option in your adapter-static options
+          # configure-pages determines artifact name/settings, no need to specify here usually
           path: 'build/'
 
   deploy:
@@ -67,4 +65,4 @@ jobs:
     steps:
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v4 # Update v1 -> v4
