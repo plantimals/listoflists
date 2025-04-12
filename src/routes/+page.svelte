@@ -25,6 +25,7 @@
   import HierarchyWrapper from '$lib/components/HierarchyWrapper.svelte'; // <-- Import wrapper
   import { verifyNip05 } from '$lib/nip05Service'; // <-- Import the new service function
   import Nip46ConnectModal from '$lib/components/Nip46ConnectModal.svelte'; // <-- Import the NIP-46 Modal
+  import ProfileView from '$lib/components/ProfileView.svelte'; // <-- Import ProfileView
 
   let isLoadingProfile: boolean = false;
   let isLoadingInitialLists: boolean = false; // Initial load from local + potentially network
@@ -57,6 +58,10 @@
   let error: string | null = null; // Store for error messages
 
   let createListModalInstance: CreateListModal; // Instance binding
+
+  // +++ VIEW STATE +++
+  let viewingNpub: string | null = null; // Controls which view is active
+  // ------------------
 
   // +++ NIP-05 Verification State Map (using imported type) +++
   let nip05VerificationStates: { [identifier: string]: Nip05VerificationStateType } = {};
@@ -158,6 +163,7 @@
     isInitialSyncing = false;
     lastLoadedPubkey = null;
     nip05VerificationStates = {};
+    viewingNpub = null; // Reset view state on logout/reset
     // Ensure any active modal states are also reset if needed
     showCreateListModal = false;
     modalTargetListId = null;
@@ -506,11 +512,9 @@
     console.log('List changed event received in +page.svelte, triggering refresh...');
     const currentPubkey = get(user)?.pubkey;
     if (currentPubkey) {
-      // Add a small delay to allow DB operations to potentially settle
-      // Although Dexie transactions should handle consistency, a brief UI delay can feel smoother.
       setTimeout(() => {
         loadDataAndBuildHierarchy(currentPubkey);
-      }, 100); // 100ms delay, adjust if needed
+      }, 100);
     } else {
       console.warn('Cannot refresh list: User pubkey not found.');
     }
@@ -518,20 +522,16 @@
 
   // Function to handle the 'openadditem' event from TreeNode
   function handleOpenAddItem(event: CustomEvent<{ listId: string; listName: string }>) {
-    // *** Debug Log: Check event detail received ***
     console.log(`%c+page.svelte: handleOpenAddItem received event with detail:`, 'color: green;', event.detail);
-
     modalTargetListId = event.detail.listId;
     modalTargetListName = event.detail.listName;
     console.log(`+page.svelte -> handleOpenAddItem: Setting modal context - ID=${modalTargetListId}, Name=${modalTargetListName}`);
-
-    // Find the dialog element and show it
     const dialogElement = document.getElementById('add_item_modal') as HTMLDialogElement | null;
     if (dialogElement) {
       dialogElement.showModal();
     } else {
       console.error("Could not find dialog element with id 'add_item_modal'");
-      alert("Error: Could not open the Add Item form."); // User feedback
+      alert("Error: Could not open the Add Item form.");
     }
   }
 
@@ -550,20 +550,21 @@
   }
 
   // +++ NIP-05 Check Handler (Refactored) +++
-  async function handleCheckNip05(event: CustomEvent<{ identifier: string; cachedNpub: string; listId: string }>) {
-    const { identifier, cachedNpub } = event.detail;
-    console.log(`Received checknip05 event for: ${identifier} (Cached: ${cachedNpub ? cachedNpub.substring(0,6) : 'none'})`);
-
-    // 1. Update state to 'checking'
+  async function handleCheckNip05(event: CustomEvent<{ identifier: string; node: TreeNodeData }>) {
+    const { identifier, node } = event.detail;
+    console.log(`Received checknip05 event for: ${identifier} (Node ID: ${node.id})`);
     nip05VerificationStates[identifier] = { status: 'checking', newlyResolvedNpub: null, errorMsg: null };
-    nip05VerificationStates = { ...nip05VerificationStates }; // Trigger reactivity
-
-    // 2. Call the verification service
-    const resultState = await verifyNip05(identifier, cachedNpub);
-
-    // 3. Update state with the final result
-    nip05VerificationStates[identifier] = resultState;
-    nip05VerificationStates = { ...nip05VerificationStates }; // Trigger reactivity
+    nip05VerificationStates = { ...nip05VerificationStates };
+    try {
+      const resultState = await verifyNip05(identifier, node.pubkey);
+      nip05VerificationStates[identifier] = resultState;
+      console.log(`NIP-05 check result for ${identifier}:`, resultState);
+    } catch (err: any) {
+      console.error(`Error during NIP-05 verification for ${identifier}:`, err);
+      nip05VerificationStates[identifier] = { status: 'failed', newlyResolvedNpub: null, errorMsg: err.message || 'Verification failed' };
+    } finally {
+      nip05VerificationStates = { ...nip05VerificationStates };
+    }
   }
   // -----------------------------
 
@@ -628,6 +629,17 @@
   }
   // --------------------------------------------------
 
+  // +++ Event Handlers from Hierarchy +++
+  function handleViewProfile(event: CustomEvent<{ npub: string }>) {
+    console.log(`+page.svelte: Received viewprofile event for npub: ${event.detail.npub}`);
+    if (event.detail.npub) {
+      viewingNpub = event.detail.npub;
+    } else {
+        console.error('+page.svelte: viewprofile event received without npub detail.');
+        generalErrorMessage = 'Cannot view profile: Missing identifier.';
+    }
+  }
+
   onMount(() => {
     // Initial load
     const currentPubkey = get(user)?.pubkey;
@@ -639,7 +651,32 @@
 
 </script>
 
-<div class="container mx-auto p-4 pt-10 md:pt-12 lg:pt-16">
+<div class="container mx-auto p-4 md:p-6 lg:p-8 max-w-screen-lg">
+
+  <!-- Top Right Buttons: Login/Logout/Sync -->
+  <div class="flex justify-end items-center mb-6 space-x-2">
+    {#if $user}
+      <span class="text-sm mr-2">Logged in as: <code class="font-mono text-xs">{$user.npub.substring(0, 10)}...</code></span>
+      {#if $isOnline}
+        <button
+            class="btn btn-sm btn-outline btn-info"
+            on:click={() => handleSync()}
+            disabled={isSyncing || isInitialSyncing}
+            title="Sync local changes and check for updates"
+        >
+          {#if isSyncing || isInitialSyncing}
+            <span class="loading loading-spinner loading-xs"></span> Syncing...
+          {:else}
+            Sync
+          {/if}
+        </button>
+      {/if}
+      <button class="btn btn-sm btn-outline btn-error" on:click={handleLogout}>Logout</button>
+    {:else}
+      <button class="btn btn-sm btn-primary" on:click={handleLogin}>Login (NIP-07)</button>
+      <button class="btn btn-sm btn-secondary" on:click={handleNip46Login}>Login (NIP-46)</button>
+    {/if}
+  </div>
 
   <!-- Network Status Indicator -->
   {#if !$isOnline}
@@ -649,6 +686,14 @@
     </div>
   {/if}
   <!-- End Network Status Indicator -->
+
+  <!-- General Error Message Display -->
+  {#if generalErrorMessage}
+    <div class="alert alert-error mb-4">
+      <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2 2m2-2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+      <span>Error: {generalErrorMessage}</span>
+    </div>
+  {/if}
 
   <h1 class="text-3xl font-bold mb-4">Nostr List Manager</h1>
   <p class="mb-6 text-base-content/80">Create, manage, and browse hierarchical Nostr lists (NIP-51).</p>
@@ -665,137 +710,60 @@
       on:itemadded={handleListChanged} />
 
     <!-- Rename List Modal Instance -->
-    <RenameListModal bind:currentListId={renameModalTargetListId} bind:currentListName={renameModalTargetListName} />
+    <RenameListModal bind:currentListId={renameModalTargetListId} bind:currentListName={renameModalTargetListName} on:listrenamed={handleListChanged} />
 
-    <!-- Logged In State - Using DaisyUI -->
-    <p class="mb-4 text-sm text-base-content/80">Logged In as: <code class="break-all font-mono bg-base-200 px-1 rounded">{$user.npub}</code></p>
-
-    {#if isLoadingProfile}
-      <!-- Loading Indicator -->
-      <div class="flex justify-center items-center p-6">
-        <span class="loading loading-spinner loading-lg text-primary"></span>
+    <!-- ===== VIEW SWITCH: Hierarchy or Profile ===== -->
+    {#if viewingNpub}
+      <!-- Profile View -->
+      <div class="mb-4">
+        <button class="btn btn-sm btn-ghost" on:click={() => viewingNpub = null}>
+          &larr; Back to Lists
+        </button>
       </div>
-    {:else if $profile}
-      <!-- Profile Card - Adjusted Vertical Layout -->
-      <div class="card bg-base-100 shadow-xl mt-4 max-w-md">
-        <!-- Avatar outside card-body -->
-        <div class="px-4 pt-4 flex justify-center"> <!-- Added padding and centering for avatar -->
-          {#if $profile.image}
-            <div class="avatar">
-              <div class="w-16 rounded-full ring ring-primary ring-offset-base-100 ring-offset-2">
-                <img src={$profile.image} alt="Profile avatar" />
-              </div>
-            </div>
-          {:else}
-            <!-- Placeholder Avatar -->
-            <div class="avatar placeholder">
-              <div class="bg-neutral text-neutral-content rounded-full w-16">
-                <span class="text-xl">{$profile.displayName?.charAt(0) || $profile.name?.charAt(0) || '?'}</span>
-              </div>
-            </div>
-          {/if}
-        </div>
-        <!-- Card body with adjusted padding and text clamping -->
-        <div class="card-body items-center text-center pt-4"> <!-- Adjusted padding, added centering -->
-          <h2 class="card-title">{$profile.displayName || $profile.name || 'Name not set'}</h2>
-          {#if $profile.about}
-            <!-- Added line-clamp and text styling -->
-            <p class="text-sm text-base-content/70 line-clamp-3">{$profile.about}</p>
-          {/if}
-        </div>
-      </div>
+      <ProfileView npub={viewingNpub} />
     {:else}
-      <!-- Profile Not Found Fallback -->
-      <p class="mt-4 italic text-base-content/70">(Profile data not found.)</p>
-    {/if}
-
-    <!-- ===== START: List Hierarchy Section ===== -->
-    <div class="divider">My Lists</div>
-
-    <!-- Hierarchy Display Section -->
-    <div class="p-4 border border-base-300 rounded-lg bg-base-100/50 min-h-[200px]">
-      
-      <!-- Action Buttons Area (Moved Inside and Above Wrapper) -->
-      <div class="mb-4 flex items-center gap-2"> 
-        <div class="flex-grow"></div> <!-- Spacer to push buttons right -->
-        <button class="btn btn-primary btn-sm" on:click={() => (window as any).create_list_modal.showModal()}>
-          Create New List
-        </button>
-        <button
-          class="btn btn-secondary btn-sm"
-          on:click={() => handleSync({ isInitialSync: false })}
-          disabled={isSyncing || $isHierarchyLoading || isLoadingInitialLists || isInitialSyncing || !$isOnline || !$user}
-          title={$isOnline ? (isSyncing || $isHierarchyLoading || isLoadingInitialLists || isInitialSyncing ? 'Action unavailable while loading/syncing' : (!$user ? 'Login required' : 'Fetch latest lists from relays')) : 'Sync unavailable while offline'}
-        >
-          {#if isSyncing}
-            <span class="loading loading-spinner loading-xs"></span>
-            Syncing...
-          {:else if $isHierarchyLoading || isLoadingInitialLists}
-            <span class="loading loading-spinner loading-xs"></span> 
-            Loading...
-          {:else}
-            Sync from Relays
-          {/if}
-        </button>
-      </div>
-      <!-- End Action Buttons Area -->
-      
+      <!-- List Hierarchy View -->
+      <div class="divider">My Lists</div>
       <HierarchyWrapper 
-        listHierarchy={$listHierarchy} 
-        {nip05VerificationStates} 
-        isHierarchyLoading={$isHierarchyLoading} 
-        {isLoadingInitialLists} 
-        on:checknip05={handleCheckNip05} 
-        on:listchanged={handleListChanged} 
+        listHierarchy={$listHierarchy}
+        isHierarchyLoading={$isHierarchyLoading}
+        isLoadingInitialLists={isLoadingInitialLists}
         on:openadditem={handleOpenAddItem} 
-        on:openrenamemodal={handleOpenRenameModal} 
+        on:openrenamemodal={handleOpenRenameModal}
+        on:viewprofile={handleViewProfile}
+        on:checknip05={handleCheckNip05}
+        on:listchanged={handleListChanged}
       />
-    </div>
-    <!-- ===== END: List Hierarchy Section ===== -->
+      <button
+        class="btn btn-primary mt-6"
+        on:click={() => createListModalInstance?.openModal()}
+        disabled={!$isOnline}
+        title={!$isOnline ? 'Cannot create list while offline' : 'Create a new root list'}
+      >
+        + Create New List
+      </button>
+    {/if}
+    <!-- ===== END VIEW SWITCH ===== -->
 
   {:else}
-    <!-- Logged Out State - Using DaisyUI -->
-    <div class="flex flex-col items-center justify-center p-6">
-      <h2 class="text-xl font-semibold mb-4">Login Required</h2>
-      <p class="mb-4">Please log in using your Nostr browser extension (e.g., Alby, Nos2x).</p>
-      <div class="flex flex-col sm:flex-row gap-4">
-        <button class="btn btn-primary" on:click={handleLogin}>
-          Login with Browser Extension (NIP-07)
-        </button>
-        <button class="btn btn-secondary" on:click={handleNip46Login} disabled={isConnectingNip46}>
-          {#if isConnectingNip46}
-            <span class="loading loading-spinner loading-xs"></span> Connecting...
-          {:else}
-            Login with Remote Signer (NIP-46)
-          {/if}
-        </button>
+    <!-- Logged Out State -->
+    <div class="card bg-base-200 shadow-md p-6 max-w-md mx-auto">
+      <h2 class="text-xl font-semibold mb-4 text-center">Welcome!</h2>
+      <p class="mb-4 text-center">Please log in using a NIP-07 browser extension or NIP-46 remote signer to manage your Nostr lists.</p>
+      <div class="flex flex-col space-y-2">
+        <button class="btn btn-primary w-full" on:click={handleLogin}>Login (NIP-07)</button>
+        <button class="btn btn-secondary w-full" on:click={handleNip46Login}>Login (NIP-46)</button>
       </div>
-
-      <!-- NIP-46 Connection Status/Error -->
-      {#if isConnectingNip46}
-        <p class="mt-4 text-info">Connecting to NIP-46 Signer...</p>
-      {/if}
       {#if nip46ConnectionError}
-        <div role="alert" class="alert alert-error mt-4">
-          <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2 2m2-2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-          <span>NIP-46 Error: {nip46ConnectionError}</span>
-        </div>
-      {/if}
-
-      <!-- General Error Display -->
-      {#if generalErrorMessage}
-        <div role="alert" class="alert alert-warning mt-4">
-          <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-          <span>{generalErrorMessage}</span>
-        </div>
+        <p class="text-error text-sm mt-3 text-center">{nip46ConnectionError}</p>
       {/if}
     </div>
+
   {/if}
 
-  <!-- End Modals -->
 </div>
 
-<!-- NIP-46 Connect Modal Instance -->
+<!-- NIP-46 Connect Modal -->
 <Nip46ConnectModal
     bind:isConnecting={isConnectingNip46}
     bind:connectionError={nip46ConnectionError}

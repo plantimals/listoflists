@@ -1,10 +1,11 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onMount, createEventDispatcher } from 'svelte';
     // import { get } from 'svelte/store'; // Removed
     // import { ndk } from '$lib/ndkStore'; // Removed
     import { ndkService } from '$lib/ndkService'; // Added
     import { localDb, type StoredEvent } from '$lib/localDb';
     import type { NDKUserProfile, NDKEvent } from '@nostr-dev-kit/ndk';
+    import { nip19 } from 'nostr-tools'; // Import nip19
 
     /**
      * The public key (hex) of the user to display.
@@ -14,8 +15,22 @@
     let profile: NDKUserProfile | null = null;
     let isLoading: boolean = true;
 
+    const dispatch = createEventDispatcher(); // Create dispatcher instance
+
     // Shortened pubkey for display if profile not found
     $: shortPubkey = pubkey ? `${pubkey.substring(0, 8)}...${pubkey.substring(pubkey.length - 4)}` : 'invalid pubkey';
+
+    // Convert hex pubkey to npub for event detail
+    $: npub = pubkey ? nip19.npubEncode(pubkey) : '';
+
+    function handleClick() {
+        if (npub) {
+            console.log(`UserItem: Dispatching viewprofile for npub: ${npub}`);
+            dispatch('viewprofile', { npub: npub });
+        } else {
+            console.error('UserItem: Cannot dispatch viewprofile, invalid pubkey/npub.');
+        }
+    }
 
     onMount(async () => {
         isLoading = true;
@@ -97,7 +112,7 @@
     });
 </script>
 
-<div class="py-1 flex items-center space-x-2">
+<div class="py-1 flex items-center space-x-2 cursor-pointer hover:bg-base-200 rounded px-1" on:click={handleClick}>
     {#if isLoading}
         <span class="loading loading-spinner loading-xs"></span>
         <span class="text-xs italic text-base-content/50">Loading profile...</span>
