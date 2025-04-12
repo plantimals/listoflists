@@ -1,13 +1,15 @@
-import NDK, { NDKNip07Signer, NDKEvent, type NDKFilter, NDKRelay, type NDKSigner } from "@nostr-dev-kit/ndk";
+import NDK, { NDKNip07Signer, NDKEvent, type NDKFilter, NDKRelay, type NDKSigner, type NDKUser, NDKNip46Signer } from "@nostr-dev-kit/ndk";
 import { browser } from "$app/environment";
 
 /**
  * Service class for interacting with the Nostr Development Kit (NDK).
  * Manages the NDK instance, relay connections, and provides methods
- * for fetching and publishing Nostr events.
+ * for fetching and publishing Nostr events. It supports dynamic activation
+ * of different signer types (NIP-07, NIP-46).
  */
 export class NdkService {
     private ndk!: NDK;
+    private activeSigner: NDKSigner | undefined = undefined; // Holds the currently active signer
     private isConnecting: boolean = false;
     private isConnected: boolean = false;
 
@@ -22,23 +24,13 @@ export class NdkService {
             'wss://nos.lol'
         ];
 
-        let nip07signer: NDKSigner | undefined = undefined;
-
-        if (browser) {
-            try {
-                 nip07signer = new NDKNip07Signer();
-            } catch (e) {
-                console.warn("NIP-07 Signer could not be initialized.", e);
-                // Allows the app to continue without signing capabilities if NIP-07 is missing
-            }
-        }
-
+        // Initialize NDK without a signer; signers will be activated dynamically
         this.ndk = new NDK({
             explicitRelayUrls: defaultRelays,
-            signer: nip07signer,
+            // No signer passed here anymore
         });
 
-        console.log('NdkService initialized.');
+        console.log('NdkService initialized without a default signer.');
 
         // Optional: Add listeners for connection events if needed later
         // this.ndk.pool.on('relay:connect', (relay: NDKRelay) => {
@@ -60,10 +52,117 @@ export class NdkService {
     }
 
     /**
-     * Gets the configured NDKSigner, if available.
+     * Gets the currently active NDKSigner, if one has been activated.
      */
     public getSigner(): NDKSigner | undefined {
-        return this.ndk.signer;
+        return this.activeSigner; // Return the internal state
+    }
+
+    /**
+     * Activates the NIP-07 signer (browser extension).
+     * @returns Promise resolving to an object indicating success, the NDKUser, or an error message.
+     */
+    public async activateNip07Signer(): Promise<{ success: boolean; user?: NDKUser; error?: string }> {
+        console.log("Attempting to activate NIP-07 signer...");
+        if (!browser) {
+            const errorMsg = 'NIP-07 is only available in browser environments.';
+            console.warn(`activateNip07Signer: ${errorMsg}`);
+            return { success: false, error: errorMsg };
+        }
+
+        try {
+            const nip07Signer = new NDKNip07Signer();
+            // Explicitly ask the signer for the user
+            const user = await nip07Signer.user();
+            if (user?.pubkey) {
+                 console.log(`NIP-07 Signer activated successfully for user: ${user.pubkey}`);
+                this.activeSigner = nip07Signer;
+                this.ndk.signer = nip07Signer; // Assign to NDK instance as well
+                return { success: true, user };
+            } else {
+                 console.warn("NIP-07 Signer activated but failed to get user info.");
+                 // Don't set the signer if we couldn't get the user
+                 this.disconnectSigner(); // Ensure clean state
+                 return { success: false, error: 'Failed to retrieve user information from NIP-07 signer.' };
+            }
+
+        } catch (e: any) {
+            const errorMsg = 'Failed to initialize NIP-07 signer or get user.';
+            console.error(`activateNip07Signer: ${errorMsg}`, e);
+            this.disconnectSigner(); // Ensure clean state on error
+            return { success: false, error: `${errorMsg} Error: ${e.message}` };
+        }
+    }
+
+     /**
+     * Activates the NIP-46 signer (remote signing, e.g., Nostr Connect).
+     * Uses the provided connection string (nostrconnect:// or bunker://).
+     * @param connectionString - The connection string (URI) for NIP-46.
+     * @returns Promise resolving to an object indicating success, the NDKUser, or an error message.
+     */
+    public async activateNip46Signer(connectionString: string): Promise<{ success: boolean; user?: NDKUser; error?: string }> {
+        console.log(`Attempting to activate NIP-46 signer with connection string: ${connectionString.substring(0, 50)}...`);
+
+        // Disconnect any existing signer first
+        this.disconnectSigner();
+
+        let remoteSigner: NDKNip46Signer | null = null;
+
+        try {
+            // Instantiate the NDKNip46Signer
+            // Assuming the constructor takes (ndk, connectionToken)
+            remoteSigner = new NDKNip46Signer(this.ndk, connectionString);
+
+            // Add listeners for debugging/status (optional but helpful)
+            remoteSigner.on('authUrl', (url: string) => { // Add type string to url parameter
+                console.log(`%c[NIP-46] Auth URL generated (for signers requiring manual paste): ${url}`, 'color: blue');
+                // In a real UI, you might display this URL if the QR/auto-connection fails
+            });
+
+            // Wait for the connection to be established and the remote end to be ready
+            console.log("[NIP-46] Waiting for signer connection to be ready...");
+            await remoteSigner.blockUntilReady(); // This can throw on timeout or connection failure
+            console.log("[NIP-46] Signer connection established and ready.");
+
+            // Fetch the user identity from the now-ready remote signer
+            const user = await remoteSigner.user(); // This can also throw if the command fails
+            if (!user?.pubkey) {
+                // No explicit disconnect needed on remoteSigner instance
+                // Setting this.ndk.signer = undefined in disconnectSigner() should handle it.
+                throw new Error('Remote signer connected but did not provide a valid public key.');
+            }
+
+            // Success! Set the active signer.
+            console.log(`NIP-46 Signer activated successfully for user: ${user.pubkey}`);
+            this.activeSigner = remoteSigner;
+            this.ndk.signer = remoteSigner;
+
+            return { success: true, user: user };
+
+        } catch (e: any) {
+            const errorMsgBase = 'Failed to connect/authenticate NIP-46 signer.';
+            console.error(`activateNip46Signer: ${errorMsgBase}`, e);
+
+            // No explicit disconnect needed on remoteSigner instance.
+            // The main disconnectSigner call below handles cleanup.
+            // if (remoteSigner && typeof remoteSigner.disconnect === 'function') { ... }
+
+            this.disconnectSigner(); // Ensure NdkService internal state is clean
+            return { success: false, error: `${errorMsgBase} ${e.message || 'See console for details.'}` };
+        }
+    }
+
+    /**
+     * Disconnects the currently active signer.
+     */
+    public disconnectSigner(): void {
+        if (this.activeSigner) {
+            console.log("Disconnecting active signer...");
+            this.activeSigner = undefined;
+            this.ndk.signer = undefined;
+        } else {
+             console.log("No active signer to disconnect.");
+        }
     }
 
     /**
