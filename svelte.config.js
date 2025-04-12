@@ -1,6 +1,9 @@
 import adapterStatic from '@sveltejs/adapter-static';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
+// Determine base path based on environment variable, default to '' for dev
+const base = process.env.BASE_PATH || '';
+
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
 	// Consult https://svelte.dev/docs/kit/integrations
@@ -18,9 +21,9 @@ const config = {
 			precompress: false
 		}),
 		// Ensure client-side routing if needed for SPA fallback
-		// paths: {
-		// 	base: process.argv.includes('dev') ? '' : process.env.BASE_PATH
-		// }
+		paths: {
+			base: base // Use the variable here
+		}
 	}
 };
 
