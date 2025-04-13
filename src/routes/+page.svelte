@@ -476,7 +476,15 @@
     console.log("%c+page.svelte: handleOpenAddItem received event with detail:", 'color: green;', event.detail);
     addItemTargetListId = event.detail.parentId;
     addItemTargetListName = event.detail.parentName;
-    showAddItemModal = true;
+    
+    // Imperatively find and open the dialog
+    const modal = document.getElementById('add_item_modal') as HTMLDialogElement | null;
+    if (modal) {
+        console.log("+page.svelte: Found modal, attempting to show...");
+        modal.showModal();
+    } else {
+        console.error("+page.svelte: Could not find AddItemModal dialog element!");
+    }
   }
 
   function handleOpenRenameModal(event: CustomEvent<{ listNodeId: string; currentName: string }>) {
@@ -669,7 +677,6 @@
       {#if viewingNpub}
         <ProfileView npub={viewingNpub} on:addlistlink={handleAddListLinkFromProfile} />
       {:else if viewingFeedForNodeId}
-        <!-- <AggregatedFeedView listNodeId={viewingFeedForNodeId} listName={viewingFeedForListName || 'List Feed'} /> -->
         <p>Feed View Placeholder for {viewingFeedForListName || viewingFeedForNodeId}</p>
       {:else}
         <div class="flex justify-between items-center mb-4">
@@ -718,6 +725,13 @@
 <Nip46ConnectModal bind:isConnecting={isConnectingNip46} bind:connectionError={nip46ConnectionError} on:initiateNip46Connect={handleInitiateNip46Connect}/>
 <EventViewModal eventId={viewingEventId} bind:open={showEventViewModal} />
 <ResourceViewModal bind:open={showResourceViewModal} coordinate={viewingResourceCoordinate} isOnline={$isOnline} />
+
+<!-- Render AddItemModal unconditionally, remove bind:open -->
+<AddItemModal
+    targetListId={addItemTargetListId}
+    targetListName={addItemTargetListName}
+    on:itemadded={handleListChanged}
+/>
 
 <style>
   .container {
