@@ -3,27 +3,28 @@
   import UserItem from '$lib/components/UserItem.svelte';
   import NoteItem from '$lib/components/NoteItem.svelte';
   import Nip05Item from '$lib/components/Nip05Item.svelte'; // Import the new component
-  import AddressableItem from '$lib/components/AddressableItem.svelte'; // <-- Import this
+  import AddressableItem from '$lib/components/AddressableItem.svelte';
+  // import ListLinkItem from '$lib/components/ListLinkItem.svelte'; // Removed non-existent component import
   import { localDb, type StoredEvent } from '$lib/localDb';
   import { ndkService } from '$lib/ndkService';
-  import { NDKEvent } from '@nostr-dev-kit/ndk';
+  import { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
   import { refreshTrigger } from '$lib/refreshStore';
-  import { createEventDispatcher } from 'svelte'; // Removed CustomEvent import
-  import { isOnline } from '$lib/networkStatusStore'; // <-- Import isOnline store
+  import { createEventDispatcher } from 'svelte';
+  import { isOnline } from '$lib/networkStatusStore';
 
   export let item: ListItem;
   export let listId: string; // The ID (coordinate or event ID) of the parent list
   export let listPubkey: string; // The pubkey of the parent list owner
 
-  let isRemovingItem: boolean = false; // Moved state from TreeNode
-  let itemErrorMessage: string | null = null; // Local error message state
+  let isRemovingItem: boolean = false;
+  let itemErrorMessage: string | null = null;
   const dispatch = createEventDispatcher();
 
   console.log('Component initialized:', 'ItemWrapper', item);
 
   // Moved from TreeNode.svelte
   async function handleRemoveItem() {
-      isRemovingItem = true; // Use local state
+      isRemovingItem = true;
       itemErrorMessage = null;
 
       const signer = ndkService.getSigner();
@@ -35,9 +36,8 @@
           isRemovingItem = false;
           return;
       }
-      
+
       try {
-          // Use listId prop here
           const originalListEventData = await localDb.getEventById(listId);
           if (!originalListEventData) {
               throw new Error(`Original list event ${listId} not found locally.`);
@@ -47,10 +47,8 @@
           newListEvent.kind = originalListEventData.kind;
           newListEvent.content = originalListEventData.content;
 
-          // Filter out the tag to be removed using item prop
           newListEvent.tags = originalListEventData.tags.filter(tag => !(tag[0] === item.type && tag[1] === item.value));
 
-          // Re-add replaceable list identifier tags
           const dTagValue = originalListEventData.tags.find(tag => tag[0] === 'd')?.[1];
           if (dTagValue && !newListEvent.tags.some(tag => tag[0] === 'd')) {
               newListEvent.tags.push(['d', dTagValue]);
@@ -61,8 +59,6 @@
            }
 
           await newListEvent.sign(signer);
-          console.log('Signed event after item removal:', newListEvent);
-
           const storedEventData: StoredEvent = {
               id: newListEvent.id,
               kind: newListEvent.kind,
@@ -71,22 +67,17 @@
               tags: newListEvent.tags,
               content: newListEvent.content,
               sig: newListEvent.sig ?? '',
-              dTag: dTagValue, 
+              dTag: dTagValue,
               published: false
           };
           await localDb.addOrUpdateEvent(storedEventData);
-          console.log('Updated list event saved locally.');
-
-          // Don't dispatch itemremoved, refreshTrigger handles UI update
           refreshTrigger.update(n => n + 1);
 
       } catch (err: any) {
           console.error('Error removing item:', err);
           itemErrorMessage = `Failed to remove item: ${err.message}`;
-          // Optionally dispatch an error event if parent needs to know
-          // dispatch('removeerror', { error: itemErrorMessage });
       } finally {
-          isRemovingItem = false; // Use local state
+          isRemovingItem = false;
       }
   }
 
@@ -101,7 +92,13 @@
     {:else if item.type === 'nip05'}
         <Nip05Item item={item} listId={listId} isOnline={$isOnline} />
     {:else if item.type === 'a'}
-        <AddressableItem coordinate={item.value} isOnline={$isOnline} />
+        <!-- Removed conditional logic for ListLinkItem due to missing component -->
+        <!-- All 'a' items will currently use AddressableItem -->
+         <AddressableItem
+             coordinate={item.value}
+             isOnline={$isOnline}
+             on:viewresource
+        />
     {/if}
 
     <!-- Remove Item Button -->

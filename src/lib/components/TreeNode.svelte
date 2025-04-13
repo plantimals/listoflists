@@ -217,6 +217,8 @@
       on:checknip05={forwardCheckNip05}
       on:viewprofile={forwardViewProfile}
       on:viewevent={forwardEvent}
+      on:navigatelist={forwardEvent}
+      on:viewresource={forwardEvent}
     /> 
 {/if}
 
@@ -236,6 +238,8 @@
           on:viewprofile
           on:viewfeed
           on:viewevent
+          on:navigatelist
+          on:viewresource
       />
     {/each}
   </div>

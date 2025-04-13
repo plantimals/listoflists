@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onMount, createEventDispatcher } from 'svelte';
     import { localDb, type StoredEvent } from '$lib/localDb';
     import { nip19 } from 'nostr-tools';
     import { NDKKind, NDKEvent, type NDKFilter } from '@nostr-dev-kit/ndk'; // Added NDKEvent, NDKFilter
@@ -13,6 +13,14 @@
     let isLoading = true;
     let error: string | null = null;
     let itemTypeLabel = "Resource"; // Default label
+
+    const dispatch = createEventDispatcher(); // Initialize dispatcher
+
+    function handleItemClick() {
+        if (!error) {
+            dispatch('viewresource', { coordinate: coordinate });
+        }
+    }
 
     onMount(async () => {
         isLoading = true;
@@ -111,7 +119,10 @@
     });
 </script>
 
-<div class="py-1 pl-2 border-l-2 border-neutral ml-1 w-full">
+<div
+    class="py-1 pl-2 border-l-2 border-neutral ml-1 w-full {error ? '' : 'cursor-pointer hover:bg-base-200'}"
+    on:click={handleItemClick}
+>
     {#if isLoading}
         <span class="loading loading-spinner loading-xs"></span>
         <span class="text-xs italic text-base-content/50 ml-1">Loading item link...</span>

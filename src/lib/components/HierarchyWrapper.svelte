@@ -13,16 +13,25 @@
     let addItemParentId: string | null = null;
 
     const dispatch = createEventDispatcher<{
+        selectnode: { nodeId: string };
+        toggleexpand: { nodeId: string; isExpanded: boolean };
+        additem: { parentId: string };
+        editlistname: { listNodeId: string; newName: string };
+        deletelist: { listNodeId: string };
         viewprofile: { npub: string };
-        viewfeed: { listNodeId: string; listName: string };
         viewevent: { eventId: string };
+        navigatelist: { coordinate: string };
+        listchanged: undefined;
+        openadditem: { parentId: string; parentName: string };
+        openrenamemodal: { listNodeId: string; currentName: string };
+        viewfeed: { listNodeId: string; listName: string };
         checknip05: any;
-        listchanged: any;
-        openrenamemodal: any;
+        [key: string]: any;
     }>();
 
-    // Forward events from TreeNode
-    function forwardEvent(event: any) {
+    // Generic forwarder
+    function forwardEvent(event: CustomEvent<any>) {
+        console.log(`HierarchyWrapper: Forwarding event type '${event.type}' with detail:`, event.detail);
         dispatch(event.type, event.detail);
     }
 
@@ -58,13 +67,20 @@
             <TreeNode 
                 node={rootNode} 
                 verificationStates={nip05VerificationStates}
-                on:checknip05={forwardEvent}  
-                on:listchanged={forwardEvent} 
-                on:openadditem={handleAddItemRequest} 
-                on:openrenamemodal={forwardEvent}
+                on:selectnode={forwardEvent}
+                on:toggleexpand={forwardEvent}
+                on:additem={forwardEvent}
+                on:editlistname={forwardEvent}
+                on:deletelist={forwardEvent}
                 on:viewprofile={forwardViewProfile}
-                on:viewfeed={forwardViewFeed}
                 on:viewevent={forwardEvent}
+                on:navigatelist={forwardEvent}
+                on:viewresource={forwardEvent}
+                on:listchanged={forwardEvent}
+                on:openadditem={forwardEvent}
+                on:openrenamemodal={forwardEvent}
+                on:viewfeed={forwardViewFeed}
+                on:checknip05={forwardEvent}
                 depth={0}
                 isRootNode={true} />
         {/each}
