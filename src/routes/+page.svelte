@@ -8,10 +8,8 @@
   import { refreshTrigger } from '$lib/refreshStore';
   import { isOnline } from '$lib/networkStatusStore';
   import { NDKEvent, type NDKUser, type NDKUserProfile, type NDKFilter, NDKNip07Signer, type NDKSigner, type NDKList, NDKKind } from '@nostr-dev-kit/ndk';
-  // import TreeNode from '$lib/components/TreeNode.svelte'; // TreeNode is used by HierarchyWrapper
   import type { TreeNodeData, Nip05VerificationStateType } from '$lib/types';
   import { localDb, type StoredEvent } from '$lib/localDb';
-  // import CreateListModal from '$lib/components/CreateListModal.svelte'; // Comment out if causing issues
   import { browser } from '$app/environment';
   import { onMount } from 'svelte';
   import { writable } from 'svelte/store';
@@ -22,16 +20,11 @@
   import { nip05 } from 'nostr-tools';
   import HierarchyWrapper from '$lib/components/HierarchyWrapper.svelte';
   import { verifyNip05 } from '$lib/nip05Service';
-  import Nip46ConnectModal from '$lib/components/Nip46ConnectModal.svelte';
-  // import ProfileView from '$lib/components/ProfileView.svelte'; // Commented out - Not used directly?
-  // import AggregatedFeedView from '$lib/components/AggregatedFeedView.svelte'; // Commented out
+  import ProfileView from '$lib/components/ProfileView.svelte';
   import EventViewModal from '$lib/components/EventViewModal.svelte';
-  import { Icon, ArrowLeft } from 'svelte-hero-icons';
-  // import FeedViewModal from '$lib/components/FeedViewModal.svelte'; // Commented out
   import ResourceViewModal from '$lib/components/ResourceViewModal.svelte';
-  // import ProfileViewModal from '$lib/components/ProfileViewModal.svelte'; // Commented out
-  // import NetworkStatusIndicator from '$lib/components/NetworkStatusIndicator.svelte'; // Commented out
-  // import UserMenu from '$lib/components/UserMenu.svelte'; // Commented out
+  import Nip46ConnectModal from '$lib/components/Nip46ConnectModal.svelte';
+  import { Icon, ArrowLeft } from 'svelte-hero-icons';
 
   let isLoadingProfile: boolean = false;
   let isLoadingInitialLists: boolean = true;
@@ -48,7 +41,6 @@
 
   let modalTargetListId: string | null = null;
   let modalTargetListName: string = '';
-  // let addItemModalInstance: AddItemModal; // Keep commented out unless AddItemModal component is fixed/uncommented
 
   let renameModalTargetListId: string | null = null;
   let renameModalTargetListName: string = '';
@@ -58,8 +50,6 @@
 
   let isLoading = writable(true);
   let error: string | null = null;
-
-  // let createListModalInstance: CreateListModal; // Commented out - Type not available
 
   let viewingNpub: string | null = null;
   let viewingFeedForNodeId: string | null = null;
@@ -145,6 +135,39 @@
     }
   }
 
+  async function handleInitiateNip46Connect(event: CustomEvent<{ connectionString: string }>) {
+    const connectionString = event.detail.connectionString;
+    console.log('Handling initiate NIP-46 connect with string:', connectionString);
+    isConnectingNip46 = true;
+    nip46ConnectionError = null;
+    generalErrorMessage = null;
+
+    try {
+      const result = await ndkService.activateNip46Signer(connectionString);
+      if (result.success && result.user) {
+        console.log('NIP-46 connection successful for user:', result.user);
+        if (get(user)?.pubkey !== result.user.pubkey) {
+          resetUserData();
+        }
+        user.set(result.user);
+
+        const modal = document.getElementById('nip46_connect_modal') as HTMLDialogElement | null;
+        if (modal) modal.close();
+
+      } else {
+        console.error('NIP-46 connection failed:', result.error);
+        nip46ConnectionError = `NIP-46 Connection Failed: ${result.error || 'Unknown error.'}`;
+        generalErrorMessage = nip46ConnectionError;
+      }
+    } catch (error) {
+      console.error('Exception during NIP-46 connection attempt:', error);
+      nip46ConnectionError = `Error connecting: ${error instanceof Error ? error.message : String(error)}`;
+      generalErrorMessage = nip46ConnectionError;
+    } finally {
+      isConnectingNip46 = false;
+    }
+  }
+
   function handleLogout() {
     console.log("Logging out...");
     ndkService.disconnectSigner();
@@ -172,6 +195,8 @@
     renameModalTargetListId = null;
     viewingEventId = null;
     showEventViewModal = false;
+    viewingResourceCoordinate = null;
+    showResourceViewModal = false;
   }
 
   async function loadUserProfile(pubkey: string) {
@@ -478,63 +503,11 @@
     }
   }
 
-  async function handleInitiateNip46Connect(event: CustomEvent<{ connectionString: string | null }>) {
-    console.log("[+page.svelte] Received initiateNip46Connect event", event.detail);
-    const { connectionString } = event.detail;
-
-    if (!connectionString) {
-      nip46ConnectionError = 'Connection string was not provided by the modal.';
-      isConnectingNip46 = false;
-      console.error("NIP-46 connection error:", nip46ConnectionError);
-      return;
-    }
-
-    nip46ConnectionError = null;
-    isConnectingNip46 = true;
-    generalErrorMessage = null;
-
-    try {
-      const result = await ndkService.activateNip46Signer(connectionString);
-
-      if (result.success && result.user) {
-        console.log('NIP-46 login successful:', result.user);
-        if (get(user)?.pubkey !== result.user.pubkey) {
-          resetUserData();
-        }
-        user.set(result.user);
-
-        const modal = document.getElementById('nip46_connect_modal') as HTMLDialogElement | null;
-        if (modal) {
-          modal.close();
-          console.log("NIP-46 modal closed on success.");
-        } else {
-          console.warn("Could not find NIP-46 modal to close it after successful connection.");
-        }
-
-      } else {
-        console.error('NIP-46 Login failed:', result.error);
-        nip46ConnectionError = result.error || 'Unknown NIP-46 connection error.';
-        if (get(user)) {
-          resetUserData();
-          user.set(null);
-        }
-      }
-    } catch (err: any) {
-      console.error('Unexpected error during NIP-46 activation process:', err);
-      nip46ConnectionError = `An unexpected error occurred: ${err.message || 'Unknown error'}. Check console.`;
-      if (get(user)) {
-        resetUserData();
-        user.set(null);
-      }
-    } finally {
-      isConnectingNip46 = false;
-    }
-  }
-
   function handleViewProfile(event: CustomEvent<{ npub: string }>) {
-    console.log("Page: handleViewProfile", event.detail.npub);
-    viewingProfileNpub = event.detail.npub;
-    showProfileViewModal = true;
+    const npub = event.detail.npub;
+    console.log(`Page: handleViewProfile ${npub}`);
+    viewingNpub = npub;
+    viewingFeedForNodeId = null;
   }
 
   function handleViewFeed(event: CustomEvent<{ listNodeId: string; listName: string }>) {
@@ -597,7 +570,6 @@
   }
 
   function handleBackNavigation() {
-    console.log("Navigating back from profile/feed view");
     viewingNpub = null;
     viewingFeedForNodeId = null;
     viewingFeedForListName = null;
@@ -614,6 +586,13 @@
     // Potentially update selectedNodeId or trigger other navigation logic here
     // For now, just log it.
     // selectedNodeId = event.detail.coordinate; // Example: This might be one way
+  }
+
+  // Placeholder function for handling the add list link action from profile view
+  function handleAddListLinkFromProfile(event: CustomEvent) {
+    console.log('Page: handleAddListLinkFromProfile received event:', event.detail);
+    // TODO: Implement logic to open a modal or UI to select a target list
+    // and add an 'a' tag item with the coordinate from event.detail.listCoordinate
   }
 
   onMount(() => {
@@ -688,8 +667,7 @@
       {/if}
 
       {#if viewingNpub}
-        <!-- <ProfileView npub={viewingNpub} on:addlistlink /> -->
-        <p>Profile View Placeholder for {viewingNpub}</p>
+        <ProfileView npub={viewingNpub} on:addlistlink={handleAddListLinkFromProfile} />
       {:else if viewingFeedForNodeId}
         <!-- <AggregatedFeedView listNodeId={viewingFeedForNodeId} listName={viewingFeedForListName || 'List Feed'} /> -->
         <p>Feed View Placeholder for {viewingFeedForListName || viewingFeedForNodeId}</p>

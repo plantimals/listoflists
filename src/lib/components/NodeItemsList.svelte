@@ -1,15 +1,17 @@
 <script lang="ts">
   // Imports and props will be added in subsequent steps
-  import type { ListItem, TreeNodeData } from '$lib/types'; // Add basic type import
+  import type { ListItem, TreeNodeData, Nip05VerificationStateType } from '$lib/types'; // Add Nip05VerificationStateType here
   import ItemWrapper from './ItemWrapper.svelte';
   import Nip05Item from './Nip05Item.svelte'; // <-- Import the new component
-  import { isOnline } from '$lib/networkStatusStore'; // Import the store
-  import type { Nip05VerificationStateType } from '$lib/types'; // <-- Import the type from $lib/types
+  import { isOnline } from '$lib/networkStatusStore'; // Corrected path
+  import { createEventDispatcher } from 'svelte';
 
   // Add props as needed, starting with node for components that need it directly
   export let node: TreeNodeData; // Example: uncomment if needed
   export let level: number; // Pass level down for correct padding
   export let verificationStates: { [id: string]: Nip05VerificationStateType }; // <-- Add prop
+
+  const dispatch = createEventDispatcher();
 
   console.log('Component initialized:', 'NodeItemsList', node);
 
@@ -27,10 +29,10 @@
                   item={item}
                   listId={node.eventId}
                   listPubkey={node.pubkey}
-                  on:viewprofile
-                  on:viewevent
-                  on:navigatelist
-                  on:viewresource
+                  on:viewprofile={(event) => dispatch('viewprofile', event.detail)}
+                  on:viewevent={(event) => dispatch('viewevent', event.detail)}
+                  on:navigatelist={(event) => dispatch('navigatelist', event.detail)}
+                  on:viewresource={(event) => dispatch('viewresource', event.detail)}
                   />
         {:else if item.type === 'nip05'}
           <!-- Handle NIP05 items with the new component -->
