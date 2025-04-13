@@ -26,6 +26,7 @@
   import Nip46ConnectModal from '$lib/components/Nip46ConnectModal.svelte';
   import { Icon, ArrowLeft } from 'svelte-hero-icons';
   import CreateListModal from '$lib/components/CreateListModal.svelte'; // Add this import
+  import AggregatedFeedView from '$lib/components/AggregatedFeedView.svelte'; // Ensure this import exists
 
   let isLoadingProfile: boolean = false;
   let isLoadingInitialLists: boolean = true;
@@ -677,8 +678,8 @@
 
       {#if viewingNpub}
         <ProfileView npub={viewingNpub} on:addlistlink={handleAddListLinkFromProfile} />
-      {:else if viewingFeedForNodeId}
-        <p>Feed View Placeholder for {viewingFeedForListName || viewingFeedForNodeId}</p>
+      {:else if viewingFeedForNodeId && viewingFeedForListName}
+        <AggregatedFeedView listNodeId={viewingFeedForNodeId} listName={viewingFeedForListName} />
       {:else}
         <div class="flex justify-between items-center mb-4">
           <h2 class="text-xl font-semibold">My Lists</h2>
