@@ -133,3 +133,21 @@
 * **AC 6:** Selecting a result using keyboard (Enter) or mouse click dismisses the palette and navigates the main view to the selected item (e.g., highlighting the list in the tree, opening the profile view, displaying the resource).
 * **AC 7:** Pressing the Escape key dismisses the command palette without taking action.
 * **AC 8:** The search and display are performant, providing results quickly even with a large local dataset [cite: NFR-02].
+
+### HIER-STORY-014: Render Markdown Content
+
+* **As a user,** I want the application to render Markdown-formatted content using `markdown-it` in event and resource views **so that** I can read articles and notes with proper formatting.
+
+**Acceptance Criteria:**
+
+* Given an event's `content` is Markdown, when the event is displayed in `ResourceViewModal` or `EventViewModal`, then the Markdown is rendered as HTML using the `markdown-it` library.
+* The rendered HTML is styled using the `@tailwindcss/typography` plugin to ensure readability and consistent design.
+* The solution handles common Markdown elements (headings, paragraphs, lists, links, blockquotes, code blocks).
+* The original text content is still visible if Markdown rendering fails or is not applicable.
+
+**Notes:**
+
+* Implement using the `markdown-it` library for parsing.
+* Ensure the `@tailwindcss/typography` plugin is configured and applied to the container rendering the HTML.
+
+---

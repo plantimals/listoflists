@@ -38,6 +38,7 @@ const config: Config = {
 		// 	themes: { preset: [ "modern" ] }
 		// })
 		require('daisyui'), // ADDED: DaisyUI plugin
+		require('@tailwindcss/typography'), // ADDED: Typography plugin
 	],
 
 	// ADDED: DaisyUI configuration

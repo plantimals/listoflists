@@ -4,6 +4,7 @@
     import { localDb, type StoredEvent } from '$lib/localDb';
     import { ndkService } from '$lib/ndkService';
     import UserItem from '$lib/components/UserItem.svelte'; // For displaying author
+    import MarkdownIt from 'markdown-it'; // ADDED: Import markdown-it
 
     export let coordinate: string | null = null;
     export let open: boolean = false;
@@ -19,6 +20,8 @@
     let kind: NDKKind | number | undefined = undefined;
 
     const dispatch = createEventDispatcher();
+
+    const md = new MarkdownIt(); // ADDED: Instantiate markdown-it
 
     // Reactive statement to fetch data when coordinate changes
     $: if (coordinate && open) {
@@ -163,9 +166,9 @@
 
 
             <!-- Content -->
-             <div class="prose max-w-none bg-base-200 p-4 rounded-md my-4 whitespace-pre-wrap break-words">
+             <div class="prose max-w-none bg-base-200 p-4 rounded-md my-4 break-words">
                 {#if content}
-                    {@html content} <!-- Basic rendering, consider sanitization/markdown -->
+                    {@html md.render(content || '')} <!-- UPDATED: Render content as markdown -->
                 {:else}
                     <p class="italic text-base-content/60">[No content available]</p>
                 {/if}

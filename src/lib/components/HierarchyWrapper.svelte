@@ -62,7 +62,7 @@
         {/if}
     </div>
 {:else if listHierarchy.length > 0}
-    <div class="mt-4 space-y-2 overflow-auto" style="max-height: 70vh;">
+    <div class="mt-4 space-y-2 overflow-auto [mask-image:linear-gradient(to_bottom,black_calc(100%-20px),transparent_100%)]" style="max-height: 70vh;">
         {#each listHierarchy as rootNode (rootNode.id)}
             <TreeNode 
                 node={rootNode} 

@@ -5,6 +5,7 @@
     import { ndkService } from '$lib/ndkService';
     import UserItem from './UserItem.svelte'; // Import UserItem
     import { Icon, ClipboardDocument, CheckCircle } from 'svelte-hero-icons'; // Import icons
+    import MarkdownIt from 'markdown-it'; // ADDED: Import markdown-it
 
     export let eventId: string | null = null;
     export let open: boolean = false;
@@ -15,6 +16,8 @@
     let copied = false; // State for copy feedback
 
     let dialogElement: HTMLDialogElement; // To control the dialog programmatically if needed
+
+    const md = new MarkdownIt(); // ADDED: Instantiate markdown-it
 
     // Shortened event ID for display
     $: shortEventId = eventId
@@ -150,7 +153,9 @@
             <!-- Event Content -->
             <div class="bg-base-200 p-3 rounded-md mb-4">
                 <p class="text-sm font-semibold mb-1">Content:</p>
-                <p class="whitespace-pre-wrap break-words text-base-content/90">{eventData.content || "(No content)"}</p>
+                <div class="prose max-w-none text-base-content/90 break-words">
+                    {@html md.render(eventData.content || '(No content)')}
+                </div>
             </div>
 
             <!-- Event Metadata -->
