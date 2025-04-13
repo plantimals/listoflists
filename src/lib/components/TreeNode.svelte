@@ -225,10 +225,9 @@
 
 <!-- Recursive Children -->
 {#if expanded && node.children && node.children.length > 0}
-  <div class="mt-1" style="margin-left: 0;"> <!-- Adjust margin if needed, or keep consistent -->
+  <div class="mt-1" style="margin-left: 0;"> 
     {#each node.children as childNode (childNode.id)}
       <svelte:self 
-          {...$$props}
           node={childNode} 
           depth={depth + 1} 
           verificationStates={verificationStates}

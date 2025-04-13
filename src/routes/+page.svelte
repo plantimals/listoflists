@@ -25,6 +25,7 @@
   import ResourceViewModal from '$lib/components/ResourceViewModal.svelte';
   import Nip46ConnectModal from '$lib/components/Nip46ConnectModal.svelte';
   import { Icon, ArrowLeft } from 'svelte-hero-icons';
+  import CreateListModal from '$lib/components/CreateListModal.svelte'; // Add this import
 
   let isLoadingProfile: boolean = false;
   let isLoadingInitialLists: boolean = true;
@@ -491,7 +492,15 @@
     console.log("page.svelte: Received openrenamemodal event", event.detail);
     renameTargetListId = event.detail.listNodeId;
     renameTargetListName = event.detail.currentName;
-    showRenameModal = true;
+
+    // Imperatively find and open the rename dialog
+    const modal = document.getElementById('rename_list_modal') as HTMLDialogElement | null;
+    if (modal) {
+        console.log("+page.svelte: Found rename modal, attempting to show...");
+        modal.showModal();
+    } else {
+        console.error("+page.svelte: Could not find RenameListModal dialog element!");
+    }
   }
 
   async function handleCheckNip05(event: CustomEvent<{ identifier: string; node: TreeNodeData }>) {
@@ -535,14 +544,6 @@
     modalTargetListId = event.detail.parentId;
     console.log(`Opening add item modal for parent list ID: ${modalTargetListId}`);
     const modal = document.getElementById('add_item_modal') as HTMLDialogElement | null;
-    modal?.showModal();
-  }
-
-  function handleRenameRequest(event: CustomEvent<{ listNodeId: string; currentName: string }>) {
-    renameModalTargetListId = event.detail.listNodeId;
-    renameModalTargetListName = event.detail.currentName;
-    console.log(`Opening rename modal for list ID: ${renameModalTargetListId} (current name: ${renameModalTargetListName})`);
-    const modal = document.getElementById('rename_list_modal') as HTMLDialogElement | null;
     modal?.showModal();
   }
 
@@ -689,7 +690,20 @@
                     Sync
                 {/if}
             </button>
-            <button class="btn btn-sm btn-primary" on:click={() => showCreateListModal = true} disabled={!$isOnline} title={$isOnline ? 'Create New List' : 'Cannot create list offline'}>+ New List</button>
+            <button 
+                class="btn btn-sm btn-primary" 
+                on:click={() => {
+                    const modal = document.getElementById('create_list_modal') as HTMLDialogElement | null;
+                    if (modal) {
+                        console.log("+page.svelte: Found create list modal, attempting to show...");
+                        modal.showModal();
+                    } else {
+                         console.error("+page.svelte: Could not find CreateListModal dialog element!");
+                    }
+                }}
+                disabled={!$isOnline}
+                title={$isOnline ? 'Create New List' : 'Cannot create list offline'}
+            >+ New List</button>
           </div>
         </div>
 
@@ -732,6 +746,15 @@
     targetListName={addItemTargetListName}
     on:itemadded={handleListChanged}
 />
+
+<!-- Add the RenameListModal component instance here -->
+<RenameListModal
+    currentListId={renameTargetListId}
+    currentListName={renameTargetListName}
+/>
+
+<!-- Add the CreateListModal instance here -->
+<CreateListModal on:listcreated={handleListChanged} />
 
 <style>
   .container {
