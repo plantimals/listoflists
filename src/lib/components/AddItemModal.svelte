@@ -22,6 +22,7 @@
     let itemInput: string = '';
     let isSaving: boolean = false;
     let errorMessage: string | null = null;
+    let dialogElement: HTMLDialogElement | null = null; // Added reference variable
 
     const dispatch = createEventDispatcher();
 
@@ -53,6 +54,13 @@
             if (result.success) {
                 console.log(`AddItemModal: Item added successfully. Dispatching 'itemadded'.`);
                 dispatch('itemadded');
+                // Close the dialog programmatically on success
+                if (dialogElement) {
+                    console.log("AddItemModal: Save successful, closing dialog programmatically.");
+                    dialogElement.close();
+                } else {
+                    console.warn("AddItemModal: Dialog element reference not found, cannot close programmatically.");
+                }
             } else {
                 console.error(`AddItemModal: Failed to add item:`, result.error);
                 errorMessage = result.error || 'Failed to add item. Unknown error.';
@@ -75,8 +83,8 @@
     }
 </script>
 
-<!-- Ensure dialog has the correct ID and on:close handler -->
-<dialog id="add_item_modal" class="modal" on:close={handleClose}>
+<!-- Bind the dialog element -->
+<dialog id="add_item_modal" class="modal" on:close={handleClose} bind:this={dialogElement}>
     <div class="modal-box">
         <h3 class="font-bold text-lg mb-4">Add Item to '{targetListName || 'List'}'</h3>
 
