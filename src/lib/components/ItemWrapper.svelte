@@ -97,7 +97,7 @@
     {#if item.type === 'p'}
         <UserItem pubkey={item.value} on:viewprofile={(event) => dispatch('viewprofile', event.detail)} />
     {:else if item.type === 'e'}
-        <NoteItem eventId={item.value} />
+        <NoteItem eventId={item.value} on:viewevent={(event) => dispatch('viewevent', event.detail)} />
     {:else if item.type === 'nip05'}
         <Nip05Item item={item} listId={listId} isOnline={$isOnline} />
     {:else if item.type === 'a'}

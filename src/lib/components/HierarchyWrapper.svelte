@@ -15,6 +15,10 @@
     const dispatch = createEventDispatcher<{
         viewprofile: { npub: string };
         viewfeed: { listNodeId: string; listName: string };
+        viewevent: { eventId: string };
+        checknip05: any;
+        listchanged: any;
+        openrenamemodal: any;
     }>();
 
     // Forward events from TreeNode
@@ -60,6 +64,7 @@
                 on:openrenamemodal={forwardEvent}
                 on:viewprofile={forwardViewProfile}
                 on:viewfeed={forwardViewFeed}
+                on:viewevent={forwardEvent}
                 depth={0}
                 isRootNode={true} />
         {/each}

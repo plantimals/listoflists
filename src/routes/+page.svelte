@@ -5,97 +5,77 @@
   import { listHierarchy, isHierarchyLoading } from '$lib/hierarchyStore';
   import { buildHierarchy } from '$lib/hierarchyService';
   import { get } from 'svelte/store';
-  import { refreshTrigger } from '$lib/refreshStore'; // <-- Import refresh trigger
-  import { isOnline } from '$lib/networkStatusStore'; // <-- Ensure isOnline store is imported
-  // import { Button } from '@skeletonlabs/skeleton'; // Removed Skeleton import
-  // Separate NDK imports: Default and Named
+  import { refreshTrigger } from '$lib/refreshStore';
+  import { isOnline } from '$lib/networkStatusStore';
   import { NDKEvent, type NDKUser, type NDKUserProfile, type NDKFilter, NDKNip07Signer, type NDKSigner, type NDKList, NDKKind } from '@nostr-dev-kit/ndk';
-  import TreeNode from '$lib/components/TreeNode.svelte'; // Import the new component
-  import type { TreeNodeData, Nip05VerificationStateType } from '$lib/types'; // Import types including the new one
-  import { localDb, type StoredEvent } from '$lib/localDb'; // Import localDb AND StoredEvent type
-  import CreateListModal from '$lib/components/CreateListModal.svelte'; // Import the modal component
-  import { browser } from '$app/environment'; // Import browser
+  import TreeNode from '$lib/components/TreeNode.svelte';
+  import type { TreeNodeData, Nip05VerificationStateType } from '$lib/types';
+  import { localDb, type StoredEvent } from '$lib/localDb';
+  import CreateListModal from '$lib/components/CreateListModal.svelte';
+  import { browser } from '$app/environment';
   import { onMount } from 'svelte';
   import { writable } from 'svelte/store';
   import { nip19 } from 'nostr-tools';
-  import AddItemModal from '$lib/components/AddItemModal.svelte'; // Import the Add Item modal
-  import RenameListModal from '$lib/components/RenameListModal.svelte'; // <-- Import RenameListModal
-  import { syncService } from '$lib/syncService'; // <-- IMPORT syncService
-  import { nip05 } from 'nostr-tools'; // <-- Import nip05
-  import HierarchyWrapper from '$lib/components/HierarchyWrapper.svelte'; // <-- Import wrapper
-  import { verifyNip05 } from '$lib/nip05Service'; // <-- Import the new service function
-  import Nip46ConnectModal from '$lib/components/Nip46ConnectModal.svelte'; // <-- Import the NIP-46 Modal
-  import ProfileView from '$lib/components/ProfileView.svelte'; // <-- Import ProfileView
-  import AggregatedFeedView from '$lib/components/AggregatedFeedView.svelte'; // Import new component
+  import AddItemModal from '$lib/components/AddItemModal.svelte';
+  import RenameListModal from '$lib/components/RenameListModal.svelte';
+  import { syncService } from '$lib/syncService';
+  import { nip05 } from 'nostr-tools';
+  import HierarchyWrapper from '$lib/components/HierarchyWrapper.svelte';
+  import { verifyNip05 } from '$lib/nip05Service';
+  import Nip46ConnectModal from '$lib/components/Nip46ConnectModal.svelte';
+  import ProfileView from '$lib/components/ProfileView.svelte';
+  import AggregatedFeedView from '$lib/components/AggregatedFeedView.svelte';
+  import EventViewModal from '$lib/components/EventViewModal.svelte';
   import { Icon, ArrowLeft } from 'svelte-hero-icons';
 
   let isLoadingProfile: boolean = false;
-  let isLoadingInitialLists: boolean = true; // Initial load from local + potentially network
-  let isSyncing: boolean = false; // Manual sync process
-  let isInitialSyncing: boolean = false; // Tracks background fetch after initial load
-  let lastLoadedPubkey: string | null = null; // Guard against multiple triggers
+  let isLoadingInitialLists: boolean = true;
+  let isSyncing: boolean = false;
+  let isInitialSyncing: boolean = false;
+  let lastLoadedPubkey: string | null = null;
 
-  // ---- General Error/Status ----
   let generalErrorMessage: string | null = null;
 
-  // ---- NIP-46 State ----
   let isConnectingNip46: boolean = false;
   let nip46ConnectionError: string | null = null;
-  // -----------------------
 
-  // Modal State
   let showCreateListModal = false;
 
-  // Add Item Modal State
   let modalTargetListId: string | null = null;
   let modalTargetListName: string = '';
-  let addItemModalInstance: AddItemModal; // Instance binding for AddItemModal
+  let addItemModalInstance: AddItemModal;
 
-  // +++ Rename List Modal State +++
   let renameModalTargetListId: string | null = null;
   let renameModalTargetListName: string = '';
-  // No instance binding needed if using direct DOM manipulation via ID
 
-  let isLoading = writable(true); // Store for loading state
-  let error: string | null = null; // Store for error messages
+  let viewingEventId: string | null = null;
+  let showEventViewModal: boolean = false;
 
-  let createListModalInstance: CreateListModal; // Instance binding
+  let isLoading = writable(true);
+  let error: string | null = null;
 
-  // +++ VIEW STATE +++
-  let viewingNpub: string | null = null; // Controls which view is active
-  let viewingFeedForNodeId: string | null = null; // State for feed view
+  let createListModalInstance: CreateListModal;
+
+  let viewingNpub: string | null = null;
+  let viewingFeedForNodeId: string | null = null;
   let viewingFeedForListName: string | null = null;
-  // ------------------
 
-  // +++ NIP-05 Verification State Map (using imported type) +++
   let nip05VerificationStates: { [identifier: string]: Nip05VerificationStateType } = {};
-  // ------------------------------------
 
-  // +++ Derived User Lists +++
   $: currentUserLists = $listHierarchy.map(node => ({ id: node.id, name: node.name })).filter(list => list.id && list.name);
-  // Simple map for now, assuming root nodes are the lists. Refine if needed.
-  // Added filter to ensure only lists with valid id/name are passed.
-  // --------------------------
 
-  // Mock data for testing TreeNode with nesting
-  // const mockNestedNodeData: TreeNodeData = { ... };
-
-  // ---- Refresh Trigger Subscription ----
   refreshTrigger.subscribe(value => {
-    if (value > 0) { // Only trigger if incremented (initial value 0)
+    if (value > 0) {
       const currentUser = get(user);
       if (currentUser?.pubkey && !isSyncing && !isLoadingInitialLists && !$isHierarchyLoading) {
         console.log('Refresh triggered! Reloading data...');
-        // Re-use the main data loading function
         loadDataAndBuildHierarchy(currentUser.pubkey);
       }
     }
   });
-  // -------------------------------------
 
-  // ---- NIP-07 Login Handler (Updated) ----
   async function handleLogin() {
-    generalErrorMessage = null; // Clear previous errors
+    generalErrorMessage = null;
     nip46ConnectionError = null;
     isConnectingNip46 = false;
 
@@ -104,30 +84,25 @@
 
     if (result.success && result.user) {
       console.log('NIP-07 login successful:', result.user);
-      // Clear previous user data if necessary
       if (get(user)?.pubkey !== result.user.pubkey) {
         resetUserData();
       }
-      user.set(result.user); // Triggers reactive load
+      user.set(result.user);
     } else {
       console.error('NIP-07 Login failed:', result.error);
       generalErrorMessage = `NIP-07 Login Failed: ${result.error || 'Unknown error.'}`;
-      // Ensure user store is null if login fails after a previous login
       if (get(user)) {
         resetUserData();
         user.set(null);
       }
     }
   }
-  // ----------------------------------------
 
-  // ---- NIP-46 Login Handler ----
   function handleNip46Login() {
-    generalErrorMessage = null; // Clear other errors
+    generalErrorMessage = null;
     nip46ConnectionError = null;
     console.log('NIP-46 Login initiated, opening modal...');
 
-    // Open the modal
     const modal = document.getElementById('nip46_connect_modal') as HTMLDialogElement | null;
     if (modal) {
       try {
@@ -135,34 +110,29 @@
         console.log('NIP-46 connect modal opened.');
       } catch (err) {
         console.error('Error showing NIP-46 modal:', err);
-        // Update error state specific to NIP-46 flow
         nip46ConnectionError = 'Could not open the NIP-46 connection dialog.';
-        generalErrorMessage = nip46ConnectionError; // Also show in general error area if modal fails badly
-        isConnectingNip46 = false; // Ensure loading is off if modal fails
+        generalErrorMessage = nip46ConnectionError;
+        isConnectingNip46 = false;
       }
     } else {
       console.error('NIP-46 Connect Modal (id=nip46_connect_modal) not found in the DOM!');
       nip46ConnectionError = 'Cannot find the NIP-46 connection dialog component.';
-      generalErrorMessage = nip46ConnectionError; // Also show in general error area
-      isConnectingNip46 = false; // Reset state if modal can't open
+      generalErrorMessage = nip46ConnectionError;
+      isConnectingNip46 = false;
     }
   }
-  // ----------------------------------------
 
-  // ---- Logout Handler ----
   function handleLogout() {
     console.log("Logging out...");
     ndkService.disconnectSigner();
-    resetUserData(); // Clear all user-related state
+    resetUserData();
     user.set(null);
-    generalErrorMessage = null; // Clear any errors
+    generalErrorMessage = null;
     nip46ConnectionError = null;
     isConnectingNip46 = false;
     console.log("User logged out.");
   }
-  // ------------------------
 
-  // ---- Utility to Reset User Data ----
   function resetUserData() {
     profile.set(null);
     listHierarchy.set([]);
@@ -173,51 +143,41 @@
     isInitialSyncing = false;
     lastLoadedPubkey = null;
     nip05VerificationStates = {};
-    viewingNpub = null; // Reset view state on logout/reset
-    // Ensure any active modal states are also reset if needed
+    viewingNpub = null;
     showCreateListModal = false;
     modalTargetListId = null;
     renameModalTargetListId = null;
+    viewingEventId = null;
+    showEventViewModal = false;
   }
-  // ------------------------------------
 
-  // Updated async function for L2.3: Ensure store reflects final DB state
   async function loadUserProfile(pubkey: string) {
     isLoadingProfile = true;
-    // Initially clear the profile to avoid showing stale data if local is empty
-    // This might be adjusted later based on UX preference.
     profile.set(null);
 
     try {
-      // 1. Immediate Local Read & Update
       const initialLocalProfileData = await localDb.getProfile(pubkey);
       if (initialLocalProfileData?.profile) {
         profile.set(initialLocalProfileData.profile as NDKUserProfile);
         console.log('User profile loaded from local DB for initial display', initialLocalProfileData.profile);
       } else {
-        // Explicitly set to null if nothing found locally (already done above, but for clarity)
         profile.set(null);
         console.log('No user profile found in local DB for pubkey:', pubkey);
       }
 
-      // 2. Update Loading State - Initial load complete
-      isLoadingProfile = false; // <- Moved up
+      isLoadingProfile = false;
 
-      // 3. Handle Network Fetch (Subsequent Update)
       if (!ndkService.getNdkInstance()) {
         console.error('NDK not initialized, cannot fetch profile from network');
-        // No further action needed here as local load was attempted
         return;
       }
 
       console.log('Attempting to fetch latest user profile event from network for pubkey:', pubkey);
-      // Fetch Kind 0 event instead of non-existent fetchProfile
       const profileEvents = await ndkService.fetchEvents({ kinds: [NDKKind.Metadata], authors: [pubkey], limit: 1 });
       const latestProfileEvent = profileEvents.size > 0 ? Array.from(profileEvents)[0] : null;
 
       if (latestProfileEvent) {
         console.log('Fetched latest profile event from network:', latestProfileEvent.rawEvent());
-        // Convert to StoredEvent and save using addOrUpdateProfile
         const storedProfileEvent: StoredEvent = {
           id: latestProfileEvent.id,
           kind: latestProfileEvent.kind ?? 0,
@@ -226,15 +186,11 @@
           tags: latestProfileEvent.tags,
           content: latestProfileEvent.content,
           sig: latestProfileEvent.sig ?? '',
-          // rawEvent: JSON.stringify(latestProfileEvent.rawEvent()) // Optional
         };
-        // Use addOrUpdateProfile which internally calls addOrUpdateEvent and handles profile table
         await localDb.addOrUpdateProfile(storedProfileEvent);
 
-        // Update the profile store with the parsed content
         try {
           const parsedProfile = JSON.parse(storedProfileEvent.content) as NDKUserProfile;
-          // Defensive check: only update store if it's still for the same user
           if (get(user)?.pubkey === pubkey) {
             profile.set(parsedProfile);
             console.log('Profile store updated with newly fetched profile data.');
@@ -245,49 +201,35 @@
 
       } else {
         console.log('No profile event (Kind 0) found on network for pubkey:', pubkey);
-        // If network fetch fails *after* a local load, we keep the local profile displayed.
-        // If there was no local profile either, it remains null.
       }
     } catch (error) {
       console.error('Error loading user profile:', error);
-      // Even if fetch fails, ensure loading state is false if it wasn't already
       isLoadingProfile = false;
     }
   }
 
-  // Fetches lists from network and stores them in DB
   async function fetchAndStoreUserLists(pubkey: string) {
     console.log(`Starting list fetch & store process for pubkey: ${pubkey}`);
 
     const listFilter: NDKFilter = {
       authors: [pubkey],
       kinds: [
-        10000, // Mute List (Replaceable)
-        10001, // Pin List (Replaceable, Kind:Parameterized Replaceable List)
-        // 10002, // Relay List Metadata (Replaceable)
-        30000, // Follow Set (Replaceable)
-        30001, // Categorized People List (Kind:Parameterized Replaceable List)
-        30003, // Categorized Bookmark List (Kind:Parameterized Replaceable List)
-        // 30002, // Categorized Relay List (Kind:Parameterized Replaceable List)
-        // NIP-51 recommends using 30000-39999 for Sets/Lists
+        10000,
+        10001,
+        30000,
+        30001,
+        30003,
       ]
     };
 
     try {
-      // Ensure NDK is connected
-      // await ndkInstance.connect(); // Removed - fetchEvents will ensure connection
       console.log('NDK service will connect if needed, fetching lists with filter:', listFilter);
 
-      // Fetch events using the service
       const fetchedListEventsSet = await ndkService.fetchEvents(listFilter);
       console.log(`Fetched ${fetchedListEventsSet.size} list events from network for user ${pubkey}.`);
 
       if (fetchedListEventsSet.size > 0) {
-        // Convert Set to Array
         const eventsToStore = Array.from(fetchedListEventsSet);
-
-        // Convert NDKEvent to StoredEvent and save Each Event using the method designed in L1.2
-        // It handles replaceables internally based on created_at and kind
         const storePromises = eventsToStore.map(event => {
           const storedEventData: StoredEvent = {
             id: event.id,
@@ -296,7 +238,7 @@
             created_at: event.created_at ?? 0,
             tags: event.tags,
             content: event.content,
-            sig: event.sig ?? '', // Ensure sig is a string
+            sig: event.sig ?? '',
           };
           return localDb.addOrUpdateEvent(storedEventData);
         });
@@ -312,23 +254,18 @@
     }
   }
 
-  // ---- REFACTORED DATA LOADING FUNCTION ----
   async function loadDataAndBuildHierarchy(pubkey: string) {
     console.log(`Initiating data load and hierarchy build for pubkey: ${pubkey}`);
-    // Reset loading states for the new user load or refresh
-    isLoadingProfile = true; // Profile load starts
-    isLoadingInitialLists = true; // Indicate initial list loading phase
-    isHierarchyLoading.set(true); // Indicate hierarchy calculation phase
-    isInitialSyncing = false; // Ensure background sync flag is false initially
-    listHierarchy.set([]); // Clear old hierarchy
-    profile.set(null); // Clear old profile before loading new one
+    isLoadingProfile = true;
+    isLoadingInitialLists = true;
+    isHierarchyLoading.set(true);
+    isInitialSyncing = false;
+    listHierarchy.set([]);
+    profile.set(null);
 
     try {
-      // 1. Load User Profile (non-awaited)
-      // loadUserProfile handles its own isLoadingProfile flag and updates UI quickly
       loadUserProfile(pubkey);
 
-      // 2. Build Hierarchy *FIRST* from Local Data
       console.log("Attempting to build hierarchy from local DB for:", pubkey);
       const usersLists: StoredEvent[] = await localDb.getUsersNip51Lists(pubkey);
       console.log(`Found ${usersLists.length} lists in local DB for hierarchy build.`);
@@ -348,8 +285,6 @@
         console.log("No lists found in local DB for initial hierarchy build.");
       }
 
-      // >>>>> Update Loading States After Local Build <<<<<
-      // Local build attempt is complete, turn off main loading indicators
       const currentLoggedInPubkeyAfterBuild = get(user)?.pubkey;
       if (currentLoggedInPubkeyAfterBuild === pubkey) {
         isLoadingInitialLists = false;
@@ -357,47 +292,35 @@
         console.log("Initial local load/build complete. Main loading indicators off.");
       } else {
         console.log("User changed after local build, not updating loading flags yet.");
-        // Flags will be reset correctly if user changes again or on next full load
       }
-      // >>>>> End Update Loading States <<<<<
 
-      // 3. Trigger Initial Background Sync using handleSync
       console.log("Initial local load complete. Triggering initial background sync via SyncService...");
-      isInitialSyncing = true; // Set flag
+      isInitialSyncing = true;
 
-      // Call the service directly, handle completion/error
       syncService.performSync({ isInitialSync: true })
         .then(refreshWasNeeded => {
           console.log(`[+page.svelte] Initial background sync completed via service. Refresh needed indication: ${refreshWasNeeded}`);
-          // Note: The UI refresh based on this is typically handled later by manual sync or refreshTrigger
-          // If a refresh *was* indicated by the initial sync, we might want to trigger
-          // loadDataAndBuildHierarchy again, but carefully to avoid loops.
-          // For now, just logging. Subsequent manual syncs will pick up changes.
         })
         .catch(error => {
           console.error("[+page.svelte] Initial background sync via SyncService failed:", error);
         })
         .finally(() => {
-          isInitialSyncing = false; // Reset flag
+          isInitialSyncing = false;
           console.log("[+page.svelte] Initial background sync process finished.");
         });
 
     } catch (error) {
       console.error("Error during loadDataAndBuildHierarchy:", error);
       const currentLoggedInPubkey = get(user)?.pubkey;
-      // Reset all relevant flags on error, but only if it's for the current user
       if (currentLoggedInPubkey === pubkey) {
         listHierarchy.set([]);
         isLoadingInitialLists = false;
         isHierarchyLoading.set(false);
-        isInitialSyncing = false; // Also reset background flag on main error
+        isInitialSyncing = false;
       }
     }
-    // The finally block is removed as flag resets are handled after local build and in the IIFE.
   }
-  // ---- END REFACTORED FUNCTION ----
 
-  // ---- IMPLEMENTED SYNC HANDLER ----
   async function handleSync(options?: { isInitialSync?: boolean }) {
     const currentUser = get(user);
     if (!currentUser?.pubkey) {
@@ -405,39 +328,31 @@
       return;
     }
 
-    // 2. Determine Context
     const isInitial = options?.isInitialSync ?? false;
     const syncContext = isInitial ? 'initial' : 'manual';
     console.log(`Starting sync process (context: ${syncContext})...`);
 
-    if (!browser) return; // Still need browser check
+    if (!browser) return;
 
-    // Prevent concurrent *manual* syncs, initial sync runs regardless
-    // Also check main isSyncing flag only for manual syncs
-    if (!isInitial && isSyncing) { // Guard adjusted for manual syncs
+    if (!isInitial && isSyncing) {
       console.warn('Manual sync attempt ignored, already syncing.');
       return;
     }
 
-    // 3. Conditional isSyncing State (Setting True)
     if (!isInitial) {
       isSyncing = true;
     }
-    let refreshNeeded = false; // Reset flag at the start of each sync
+    let refreshNeeded = false;
 
     try {
-      // <<< --- REPLACE OLD SYNC LOGIC --- >>>
       console.log(`[Sync ${syncContext}] Calling syncService.performSync for ${currentUser.pubkey}...`);
 
       refreshNeeded = await syncService.performSync(options);
 
       console.log(`[Sync ${syncContext}] syncService.performSync finished. Refresh needed: ${refreshNeeded}`);
-      // <<< --- END REPLACEMENT --- >>>
 
-      // 4. Conditional Data Refresh
       if (!isInitial && refreshNeeded) {
         console.log("Data changed during manual sync, reloading hierarchy...");
-        // Re-fetch pubkey in case of context switch during async ops
         const currentPubkey = get(user)?.pubkey;
         if (currentPubkey) {
           await loadDataAndBuildHierarchy(currentPubkey);
@@ -447,77 +362,56 @@
       } else if (isInitial && refreshNeeded) {
         console.log("Data changed during initial sync, refresh skipped as UI was just loaded.");
       } else {
-        // Added log for clarity when no changes detected in either context
-        console.log("[Sync ${syncContext}] No data changes detected, refresh skipped.");
+        console.log(`[Sync ${syncContext}] No data changes detected, refresh skipped.`);
       }
 
     } catch (error) {
       console.error('Error during sync process:', error);
-      // Optionally set an error state here
     } finally {
-      // 5. Conditional isSyncing State (Setting False)
       if (!isInitial) {
         isSyncing = false;
       }
       console.log(`Sync process finished (context: ${syncContext}).`);
     }
   }
-  // ---- END SYNC HANDLER ----
 
-  // Function to handle refresh after list creation
   function handleListCreated() {
     console.log("Modal dispatched 'listcreated', refreshing data...");
     const currentPubkey = get(user)?.pubkey;
     if (currentPubkey) {
-      // Trigger the existing data load function
       loadDataAndBuildHierarchy(currentPubkey);
     } else {
       console.warn("Tried to refresh list after creation, but user is no longer logged in?");
     }
   }
 
-  // Refactored Reactive Block using the new function
   $: {
     const currentPubkey = $user?.pubkey;
 
     if (currentPubkey) {
-      // Only proceed if this pubkey hasn't been processed yet for the initial load
       if (currentPubkey !== lastLoadedPubkey) {
         console.log(`Detected new or changed user: ${currentPubkey}. Initiating initial data load.`);
-        lastLoadedPubkey = currentPubkey; // Set the guard for *initial* load
-
-        // Call the refactored function for initial load
-        // No need to await here, it manages its own state async
+        lastLoadedPubkey = currentPubkey;
         loadDataAndBuildHierarchy(currentPubkey);
       } else {
         // console.log(`User ${currentPubkey} already processed for initial load.`);
       }
 
     } else {
-      // --- Logout Logic --- 
-      if (lastLoadedPubkey !== null) { // Only clear if we were previously logged in
+      if (lastLoadedPubkey !== null) {
         console.log("User logged out or became null, clearing states and guard.");
         profile.set(null);
         listHierarchy.set([]);
         isLoadingProfile = false;
         isLoadingInitialLists = true;
         isHierarchyLoading.set(false);
-        isSyncing = false; // Reset sync state on logout
+        isSyncing = false;
         isInitialSyncing = false;
-        lastLoadedPubkey = null; // Reset guard
+        lastLoadedPubkey = null;
       }
     }
   }
 
-  // Remove the old reactive block that depended on nip51Lists store
-  /*
-  $:
-    if ($nip51Lists.length > 0 && get(listHierarchy).length === 0 && !get(isHierarchyLoading)) {
-        // ... old hierarchy build logic based on nip51Lists store ...
-    }
-  */
-
-  // Function to handle the listchanged event from TreeNode
   function handleListChanged() {
     console.log('List changed event received in +page.svelte, triggering refresh...');
     const currentPubkey = get(user)?.pubkey;
@@ -530,7 +424,6 @@
     }
   }
 
-  // Function to handle the 'openadditem' event from TreeNode
   function handleOpenAddItem(event: CustomEvent<{ listId: string; listName: string }>) {
     console.log(`%c+page.svelte: handleOpenAddItem received event with detail:`, 'color: green;', event.detail);
     modalTargetListId = event.detail.listId;
@@ -545,7 +438,6 @@
     }
   }
 
-  // +++ NEW: Function to handle opening the Rename List modal +++
   function handleOpenRenameModal(event: CustomEvent<{ listId: string; listName: string }>) {
     console.log("page.svelte: Received openrenamemodal event", event.detail);
     renameModalTargetListId = event.detail.listId;
@@ -559,7 +451,6 @@
     }
   }
 
-  // +++ NIP-05 Check Handler (Refactored) +++
   async function handleCheckNip05(event: CustomEvent<{ identifier: string; node: TreeNodeData }>) {
     const { identifier, node } = event.detail;
     console.log(`Received checknip05 event for: ${identifier} (Node ID: ${node.id})`);
@@ -576,37 +467,32 @@
       nip05VerificationStates = { ...nip05VerificationStates };
     }
   }
-  // -----------------------------
 
-  // ---- Handler for NIP-46 Connection Initiation ----
   async function handleInitiateNip46Connect(event: CustomEvent<{ connectionString: string | null }>) {
     console.log("[+page.svelte] Received initiateNip46Connect event", event.detail);
     const { connectionString } = event.detail;
 
     if (!connectionString) {
       nip46ConnectionError = 'Connection string was not provided by the modal.';
-      isConnectingNip46 = false; // Ensure loading state is off
+      isConnectingNip46 = false;
       console.error("NIP-46 connection error:", nip46ConnectionError);
       return;
     }
 
-    // Reset error, set loading state
     nip46ConnectionError = null;
     isConnectingNip46 = true;
-    generalErrorMessage = null; // Clear general errors too
+    generalErrorMessage = null;
 
     try {
       const result = await ndkService.activateNip46Signer(connectionString);
 
       if (result.success && result.user) {
         console.log('NIP-46 login successful:', result.user);
-        // Clear previous user data if necessary
         if (get(user)?.pubkey !== result.user.pubkey) {
           resetUserData();
         }
-        user.set(result.user); // Triggers reactive load
+        user.set(result.user);
 
-        // Close the modal on success
         const modal = document.getElementById('nip46_connect_modal') as HTMLDialogElement | null;
         if (modal) {
           modal.close();
@@ -618,7 +504,6 @@
       } else {
         console.error('NIP-46 Login failed:', result.error);
         nip46ConnectionError = result.error || 'Unknown NIP-46 connection error.';
-        // Ensure user store is null if login fails after a previous login
         if (get(user)) {
           resetUserData();
           user.set(null);
@@ -627,29 +512,25 @@
     } catch (err: any) {
       console.error('Unexpected error during NIP-46 activation process:', err);
       nip46ConnectionError = `An unexpected error occurred: ${err.message || 'Unknown error'}. Check console.`;
-      // Ensure user store is null if login fails after a previous login
       if (get(user)) {
         resetUserData();
         user.set(null);
       }
     } finally {
-      // Always turn off the loading indicator, whether success or failure
       isConnectingNip46 = false;
     }
   }
-  // --------------------------------------------------
 
-  // +++ Event Handlers from Hierarchy +++
   function handleViewProfile(event: CustomEvent<{ npub: string }>) {
     console.log(`+page.svelte: Received viewprofile event for npub: ${event.detail.npub}`);
-    viewingFeedForNodeId = null; // Close feed view if open
+    viewingFeedForNodeId = null;
     viewingFeedForListName = null;
     viewingNpub = event.detail.npub;
   }
 
   function handleViewFeed(event: CustomEvent<{ listNodeId: string; listName: string }>) {
     console.log(`+page.svelte: Received viewfeed event for Node ID: ${event.detail.listNodeId}`);
-    viewingNpub = null; // Ensure profile view is closed
+    viewingNpub = null;
     viewingFeedForNodeId = event.detail.listNodeId;
     viewingFeedForListName = event.detail.listName;
   }
@@ -660,143 +541,183 @@
     viewingFeedForListName = null;
   }
 
-  onMount(() => {
-    // Initial load
-    const currentPubkey = get(user)?.pubkey;
-    if (currentPubkey) {
-      loadDataAndBuildHierarchy(currentPubkey);
+  function handleAddItemRequest(event: CustomEvent<{ parentId: string }>) {
+    modalTargetListId = event.detail.parentId;
+    console.log(`Opening add item modal for parent list ID: ${modalTargetListId}`);
+    const modal = document.getElementById('add_item_modal') as HTMLDialogElement | null;
+    modal?.showModal();
+  }
+
+  function handleRenameRequest(event: CustomEvent<{ listNodeId: string; currentName: string }>) {
+    renameModalTargetListId = event.detail.listNodeId;
+    renameModalTargetListName = event.detail.currentName;
+    console.log(`Opening rename modal for list ID: ${renameModalTargetListId} (current name: ${renameModalTargetListName})`);
+    const modal = document.getElementById('rename_list_modal') as HTMLDialogElement | null;
+    modal?.showModal();
+  }
+
+  function handleViewEvent(event: CustomEvent<{ eventId: string }>) {
+    console.log(`Received viewevent for eventId: ${event.detail.eventId}`);
+    viewingEventId = event.detail.eventId;
+    showEventViewModal = true;
+  }
+
+  async function handleManualSync() {
+    const currentUser = get(user);
+    if (!currentUser?.pubkey) {
+      generalErrorMessage = 'Cannot sync without a logged-in user.';
+      return;
     }
-    // Potentially trigger initial sync here too
+    if (!$isOnline) {
+      generalErrorMessage = 'Cannot sync while offline.';
+      return;
+    }
+
+    console.log("Starting manual sync...");
+    isSyncing = true;
+    generalErrorMessage = null;
+    try {
+      await syncService.syncNow(currentUser.pubkey);
+      console.log("Manual sync completed successfully.");
+    } catch (err) {
+      console.error("Manual sync failed:", err);
+      generalErrorMessage = `Sync failed: ${err instanceof Error ? err.message : 'Unknown error'}`;
+    } finally {
+      isSyncing = false;
+    }
+  }
+
+  function handleBackNavigation() {
+    console.log("Navigating back from profile/feed view");
+    viewingNpub = null;
+    viewingFeedForNodeId = null;
+    viewingFeedForListName = null;
+  }
+
+  onMount(() => {
+    if (browser) {
+        if (!get(user)) {
+            console.log('Checking for existing NIP-07 signer on mount...');
+            ndkService.activateNip07Signer().then(result => {
+                if (result.success && result.user && !get(user)) {
+                  console.log('Found and activated existing NIP-07 signer on mount.');
+                  user.set(result.user);
+                } else if (!result.success && !get(user)) {
+                  console.log('No active NIP-07 signer found on mount or activation failed:', result.error);
+                }
+            });
+        } else {
+             console.log('User already exists on mount, ensuring data load is triggered...');
+        }
+    }
   });
 
 </script>
 
-<div class="container mx-auto p-4 md:p-6 lg:p-8 max-w-screen-lg">
-
-  <!-- Top Right Buttons: Login/Logout/Sync -->
-  <div class="flex justify-end items-center mb-6 space-x-2">
-    {#if $user}
-      <span class="text-sm mr-2">Logged in as: <code class="font-mono text-xs">{$user.npub.substring(0, 10)}...</code></span>
-      {#if $isOnline}
-        <button
-            class="btn btn-sm btn-outline btn-info"
-            on:click={() => handleSync()}
-            disabled={isSyncing || isInitialSyncing}
-            title="Sync local changes and check for updates"
-        >
-          {#if isSyncing || isInitialSyncing}
-            <span class="loading loading-spinner loading-xs"></span> Syncing...
+<div class="container mx-auto p-4 h-screen flex flex-col">
+  <header class="mb-4 flex justify-between items-center">
+    <h1 class="text-2xl font-bold">Nostr List Manager</h1>
+    <div>
+      {#if $user}
+        <div class="flex items-center">
+          {#if $profile}
+            <span class="mr-2 hidden sm:inline">Welcome, {$profile.displayName || $profile.name || $user.npub.substring(0, 12)}...</span>
+          {:else if isLoadingProfile}
+            <span class="mr-2 italic text-sm">Loading profile...</span>
           {:else}
-            Sync
+            <span class="mr-2 italic text-sm">{$user.npub.substring(0, 12)}...</span>
           {/if}
-        </button>
-      {/if}
-      <button class="btn btn-sm btn-outline btn-error" on:click={handleLogout}>Logout</button>
-    {:else}
-      <button class="btn btn-sm btn-primary" on:click={handleLogin}>Login (NIP-07)</button>
-      <button class="btn btn-sm btn-secondary" on:click={handleNip46Login}>Login (NIP-46)</button>
-    {/if}
-  </div>
-
-  <!-- Network Status Indicator -->
-  {#if !$isOnline}
-    <div class="alert alert-sm alert-warning justify-start mt-2 mb-4 shadow-md">
-      <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-      <span>Offline Mode: Functionality requiring network access (like Sync) is unavailable.</span>
-    </div>
-  {/if}
-  <!-- End Network Status Indicator -->
-
-  <!-- General Error Message Display -->
-  {#if generalErrorMessage}
-    <div class="alert alert-error mb-4">
-      <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2 2m2-2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-      <span>Error: {generalErrorMessage}</span>
-    </div>
-  {/if}
-
-  <h1 class="text-3xl font-bold mb-4">Nostr List Manager</h1>
-  <p class="mb-6 text-base-content/80">Create, manage, and browse hierarchical Nostr lists (NIP-51).</p>
-
-  {#if $user}
-    <!-- Render the modal (it's hidden by default) -->
-    <CreateListModal bind:this={createListModalInstance} on:listcreated={handleListChanged} />
-
-    <!-- Add Item Modal Instance -->
-    <AddItemModal
-      bind:this={addItemModalInstance}
-      targetListId={modalTargetListId}
-      targetListName={modalTargetListName}
-      on:itemadded={handleListChanged} />
-
-    <!-- Rename List Modal Instance -->
-    <RenameListModal bind:currentListId={renameModalTargetListId} bind:currentListName={renameModalTargetListName} on:listrenamed={handleListChanged} />
-
-    <!-- ===== VIEW SWITCH: Hierarchy or Profile ===== -->
-    {#if viewingNpub}
-      <!-- Profile View -->
-      <div class="mb-4">
-        <button class="btn btn-sm btn-ghost" on:click={handleBackToLists}>
-          <Icon src={ArrowLeft} class="h-4 w-4 mr-1" />
-          Back to Lists
-        </button>
-      </div>
-      <ProfileView npub={viewingNpub} currentUserLists={currentUserLists} />
-    {:else if viewingFeedForNodeId && viewingFeedForListName}
-      <!-- Aggregated Feed View -->
-      <div class="mb-4">
-        <button class="btn btn-ghost btn-sm" on:click={handleBackToLists}>
-          <Icon src={ArrowLeft} class="h-4 w-4 mr-1" />
-          Back to Lists
-        </button>
-      </div>
-      <AggregatedFeedView listNodeId={viewingFeedForNodeId} listName={viewingFeedForListName} />
-    {:else}
-      <!-- List Hierarchy View -->
-      <div class="divider">My Lists</div>
-      <HierarchyWrapper 
-        listHierarchy={$listHierarchy}
-        isHierarchyLoading={$isHierarchyLoading}
-        isLoadingInitialLists={isLoadingInitialLists}
-        on:openadditem={handleOpenAddItem} 
-        on:openrenamemodal={handleOpenRenameModal}
-        on:viewprofile={handleViewProfile}
-        on:checknip05={handleCheckNip05}
-        on:listchanged={handleListChanged}
-        on:viewfeed={handleViewFeed}
-      />
-      <button
-        class="btn btn-primary mt-6"
-        on:click={() => createListModalInstance?.openModal()}
-        disabled={!$isOnline}
-        title={!$isOnline ? 'Cannot create list while offline' : 'Create a new root list'}
-      >
-        + Create New List
-      </button>
-    {/if}
-    <!-- ===== END VIEW SWITCH ===== -->
-
-  {:else}
-    <!-- Logged Out State -->
-    <div class="card bg-base-200 shadow-md p-6 max-w-md mx-auto">
-      <h2 class="text-xl font-semibold mb-4 text-center">Welcome!</h2>
-      <p class="mb-4 text-center">Please log in using a NIP-07 browser extension or NIP-46 remote signer to manage your Nostr lists.</p>
-      <div class="flex flex-col space-y-2">
-        <button class="btn btn-primary w-full" on:click={handleLogin}>Login (NIP-07)</button>
-        <button class="btn btn-secondary w-full" on:click={handleNip46Login}>Login (NIP-46)</button>
-      </div>
-      {#if nip46ConnectionError}
-        <p class="text-error text-sm mt-3 text-center">{nip46ConnectionError}</p>
+          <button class="btn btn-sm btn-outline btn-error" on:click={handleLogout}>Logout</button>
+        </div>
+      {:else}
+        <div class="space-x-2">
+          <button class="btn btn-sm btn-primary" on:click={handleLogin} disabled={!browser || isConnectingNip46}>
+            {#if isConnectingNip46 && !nip46ConnectionError}
+               <span class="loading loading-spinner loading-xs"></span> Connecting...
+            {:else}
+               Login (NIP-07)
+            {/if}
+          </button>
+           <button class="btn btn-sm btn-secondary" on:click={handleNip46Login} disabled={isConnectingNip46}>
+             Login (NIP-46)
+          </button>
+        </div>
       {/if}
     </div>
+  </header>
 
-  {/if}
+   {#if generalErrorMessage}
+      <div class="alert alert-error shadow-lg mb-4">
+        <div>
+          <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current flex-shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          <span>Error: {generalErrorMessage}</span>
+        </div>
+      </div>
+   {/if}
 
+  <main class="flex-grow overflow-y-auto bg-base-200 p-4 rounded-lg shadow">
+    {#if $user}
+
+      {#if viewingNpub || viewingFeedForNodeId}
+        <button class="btn btn-sm btn-ghost mb-4" on:click={handleBackNavigation}>
+          <Icon src={ArrowLeft} class="h-4 w-4 mr-1" /> Back to Lists
+        </button>
+      {/if}
+
+      {#if viewingNpub}
+        <ProfileView npub={viewingNpub} on:addlistlink />
+      {:else if viewingFeedForNodeId}
+        <AggregatedFeedView listNodeId={viewingFeedForNodeId} listName={viewingFeedForListName || 'List Feed'} />
+      {:else}
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-xl font-semibold">My Lists</h2>
+          <div class="space-x-2">
+             <button class="btn btn-sm btn-info" on:click={handleManualSync} disabled={isSyncing || !$isOnline} title={$isOnline ? (isSyncing ? 'Syncing...' : 'Manual Sync (Fetch remote & Publish local)') : 'Sync disabled offline'}>
+                {#if isSyncing}
+                    <span class="loading loading-spinner loading-xs"></span> Syncing...
+                {:else}
+                    Sync
+                {/if}
+            </button>
+            <button class="btn btn-sm btn-primary" on:click={() => showCreateListModal = true} disabled={!$isOnline} title={$isOnline ? 'Create New List' : 'Cannot create list offline'}>+ New List</button>
+          </div>
+        </div>
+
+         {#if isInitialSyncing}
+           <div class="text-sm italic text-info mb-2">Performing initial background sync...</div>
+         {/if}
+
+        <HierarchyWrapper
+            listHierarchy={$listHierarchy}
+            nip05VerificationStates={nip05VerificationStates}
+            isHierarchyLoading={$isHierarchyLoading}
+            isLoadingInitialLists={isLoadingInitialLists}
+            on:listchanged={handleListChanged}
+            on:openadditem={handleOpenAddItem}
+            on:openrenamemodal={handleOpenRenameModal}
+            on:checknip05={handleCheckNip05}
+            on:viewprofile={handleViewProfile}
+            on:viewfeed={handleViewFeed}
+            on:viewevent={handleViewEvent}
+        />
+      {/if}
+
+    {:else}
+      <div class="text-center p-8">
+        <p class="text-lg">Please log in using NIP-07 (browser extension) or NIP-46 (remote signer) to manage your Nostr lists.</p>
+      </div>
+    {/if}
+  </main>
 </div>
 
-<!-- NIP-46 Connect Modal -->
-<Nip46ConnectModal
-    bind:isConnecting={isConnectingNip46}
-    bind:connectionError={nip46ConnectionError}
-    on:initiateNip46Connect={handleInitiateNip46Connect}
-/>
+<CreateListModal bind:showModal={showCreateListModal} on:listcreated={handleListCreated} />
+<AddItemModal targetListId={modalTargetListId} />
+<RenameListModal bind:currentListId={renameModalTargetListId} bind:currentListName={renameModalTargetListName} />
+<Nip46ConnectModal bind:isConnecting={isConnectingNip46} bind:connectionError={nip46ConnectionError} on:initiateNip46Connect={handleInitiateNip46Connect}/>
+<EventViewModal eventId={viewingEventId} bind:open={showEventViewModal} />
+
+<style>
+  .container {
+    max-height: 100vh;
+  }
+</style>

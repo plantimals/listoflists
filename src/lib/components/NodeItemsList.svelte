@@ -30,8 +30,8 @@
                   item={item}
                   listId={node.eventId}
                   listPubkey={node.pubkey}
-                  isOnline={$isOnline}
                   on:viewprofile={(event) => dispatch('viewprofile', event.detail)}
+                  on:viewevent={(event) => dispatch('viewevent', event.detail)}
                   />
         {:else if item.type === 'nip05'}
           <!-- Handle NIP05 items with the new component -->

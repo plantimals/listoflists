@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onMount, createEventDispatcher } from 'svelte';
     import { get } from 'svelte/store';
     import { ndkService } from '$lib/ndkService';
     import { localDb, type StoredEvent } from '$lib/localDb';
@@ -12,6 +12,9 @@
 
     let noteData: StoredEvent | null = null;
     let isLoading: boolean = true;
+
+    // Create dispatcher
+    const dispatch = createEventDispatcher();
 
     // Shortened event ID for display
     $: shortEventId = eventId ? `${eventId.substring(0, 8)}...${eventId.substring(eventId.length - 4)}` : 'invalid eventId';
@@ -91,7 +94,10 @@
 
 </script>
 
-<div class="py-1 pl-2 border-l-2 border-base-300 ml-1">
+<div
+    class="py-1 pl-2 border-l-2 border-base-300 ml-1 cursor-pointer hover:bg-base-200"
+    on:click={() => dispatch('viewevent', { eventId })}
+>
     {#if isLoading}
         <span class="loading loading-spinner loading-xs"></span>
         <span class="text-xs italic text-base-content/50 ml-1">Loading note...</span>

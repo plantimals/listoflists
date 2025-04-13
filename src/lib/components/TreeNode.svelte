@@ -122,6 +122,12 @@
         dispatch('viewprofile', event.detail); 
     }
 
+    // Generic forwarder function
+    function forwardEvent(event: CustomEvent<any>) {
+        console.log(`TreeNode: Forwarding event type '${event.type}' with detail:`, event.detail);
+        dispatch(event.type, event.detail);
+    }
+
     // Forward checknip05 from NodeItemsList
     function forwardCheckNip05(event: CustomEvent<any>) {
         dispatch('checknip05', event.detail);
@@ -210,6 +216,7 @@
       {verificationStates} 
       on:checknip05={forwardCheckNip05}
       on:viewprofile={forwardViewProfile}
+      on:viewevent={forwardEvent}
     /> 
 {/if}
 
@@ -228,6 +235,7 @@
           on:openrenamemodal
           on:viewprofile
           on:viewfeed
+          on:viewevent
       />
     {/each}
   </div>
