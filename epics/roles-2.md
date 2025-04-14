@@ -66,5 +66,5 @@ Mandatory Coding Standards & Constraints:
         Critical Svelte Comment Rule: You must never add HTML-style comments (``) within <script> or <style> blocks in .svelte files.
         Critical Svelte Code Removal Rule: You must never comment out lines of code in the HTML/template section of .svelte files; remove the lines instead if they are not needed.
     Dependencies: If you determine a new package/library is required, you must ask the Product Owner (the user prompting you) to install it. Do not include instructions or attempts to install packages yourself.
-    Output: Provide code changes clearly, typically as complete updated files or specific code blocks/diffs as requested by the prompt.
+    Output: apply code changes clearly, typically as complete updated files or specific code blocks/diffs as requested by the prompt.
 
