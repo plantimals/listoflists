@@ -12,7 +12,7 @@
   import { localDb, type StoredEvent } from '$lib/localDb';
   import { browser } from '$app/environment';
   import { onMount } from 'svelte';
-  import { writable } from 'svelte/store';
+  import { writable, derived } from 'svelte/store';
   import { nip19 } from 'nostr-tools';
   import AddItemModal from '$lib/components/AddItemModal.svelte'; // Keep if needed, but might comment out usage
   import RenameListModal from '$lib/components/RenameListModal.svelte'; // Keep if needed, but might comment out usage
@@ -24,7 +24,7 @@
   import EventViewModal from '$lib/components/EventViewModal.svelte';
   import ResourceViewModal from '$lib/components/ResourceViewModal.svelte';
   import Nip46ConnectModal from '$lib/components/Nip46ConnectModal.svelte';
-  import { Icon, ArrowLeft } from 'svelte-hero-icons';
+  import { Icon, ArrowLeft, AdjustmentsHorizontal, ListBullet } from 'svelte-hero-icons';
   import CreateListModal from '$lib/components/CreateListModal.svelte'; // Add this import
   import AggregatedFeedView from '$lib/components/AggregatedFeedView.svelte'; // Ensure this import exists
 
@@ -77,7 +77,45 @@
   let showResourceViewModal = false;
   let viewingResourceCoordinate: string | null = null;
 
+  // State for hierarchy view toggle
+  let showRootsOnly = true; // Default to showing only root lists
+
   $: currentUserLists = $listHierarchy.map(node => ({ id: node.id, name: node.name })).filter(list => list.id && list.name);
+
+  // Helper function to get IDs of all nested nodes
+  function getAllChildIds(nodes: TreeNodeData[]): Set<string> {
+      const childIds = new Set<string>();
+      const queue = [...nodes];
+      while (queue.length > 0) {
+          const node = queue.shift();
+          if (node && node.children) {
+              node.children.forEach(child => {
+                  childIds.add(child.id);
+                  queue.push(child); // Add child to queue to process its children
+              });
+          }
+      }
+      return childIds;
+  }
+
+  // Reactive variable to store IDs of lists that are nested somewhere
+  let nestedListIdsSet = new Set<string>();
+  $: {
+    nestedListIdsSet = getAllChildIds($listHierarchy);
+    // console.log("Nested List IDs Set:", nestedListIdsSet);
+  }
+
+  // Reactive variable for the filtered hierarchy based on the toggle
+  let filteredHierarchy: TreeNodeData[] = [];
+  $: {
+      if (showRootsOnly) {
+          filteredHierarchy = $listHierarchy.filter(rootNode => !nestedListIdsSet.has(rootNode.id));
+          // console.log(`Filtered to Roots Only: ${filteredHierarchy.length} roots`);
+      } else {
+          filteredHierarchy = $listHierarchy;
+          // console.log(`Showing Full Hierarchy: ${filteredHierarchy.length} top-level nodes`);
+      }
+  }
 
   refreshTrigger.subscribe(value => {
     if (value > 0) {
@@ -683,13 +721,24 @@
       {:else}
         <div class="flex justify-between items-center mb-4">
           <h2 class="text-xl font-semibold">My Lists</h2>
-          <div class="space-x-2">
+          <div class="flex items-center space-x-2">
              <button class="btn btn-sm btn-info" on:click={handleManualSync} disabled={isSyncing || !$isOnline} title={$isOnline ? (isSyncing ? 'Syncing...' : 'Manual Sync') : 'Sync disabled offline'}>
                 {#if isSyncing}
                     <span class="loading loading-spinner loading-xs"></span> Syncing...
                 {:else}
                     Sync
                 {/if}
+            </button>
+            <button 
+                class="btn btn-sm btn-ghost" 
+                on:click={() => { showRootsOnly = !showRootsOnly; }}
+                title={showRootsOnly ? "Show Full Tree" : "Show Roots Only"}
+            >
+              {#if showRootsOnly}
+                <Icon src={AdjustmentsHorizontal} class="w-5 h-5" />
+              {:else}
+                <Icon src={ListBullet} class="w-5 h-5" />
+              {/if}
             </button>
             <button 
                 class="btn btn-sm btn-primary" 
@@ -713,10 +762,11 @@
          {/if}
 
         <HierarchyWrapper
-            listHierarchy={$listHierarchy}
+            listHierarchy={filteredHierarchy}
             nip05VerificationStates={nip05VerificationStates}
             isHierarchyLoading={$isHierarchyLoading}
             isLoadingInitialLists={isLoadingInitialLists}
+            currentUserPubkey={$user?.pubkey}
             on:listchanged={handleListChanged}
             on:openadditem={handleOpenAddItem}
             on:openrenamemodal={handleOpenRenameModal}

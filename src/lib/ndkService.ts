@@ -1,5 +1,6 @@
 import NDK, { NDKNip07Signer, NDKEvent, type NDKFilter, NDKRelay, type NDKSigner, type NDKUser, NDKNip46Signer } from "@nostr-dev-kit/ndk";
 import { browser } from "$app/environment";
+import { localDb, type StoredEvent } from './localDb'; // Import localDb
 
 /**
  * Service class for interacting with the Nostr Development Kit (NDK).
@@ -251,7 +252,130 @@ export class NdkService {
         }
     }
 
-     /**
+    /**
+     * Fetches details (profiles, events, resources) for given identifiers
+     * if not already present in the local cache, and stores fetched data.
+     * Runs non-blockingly in the background.
+     * @param identifiers - Object containing arrays of pubkeys, eventIds, and coordinates to fetch.
+     */
+    public async fetchAndCacheItemDetails(identifiers: {
+        pubkeys: string[];
+        eventIds: string[];
+        coordinates: string[]; // Format "kind:pubkey:dTag"
+    }): Promise<void> {
+        console.log('[NdkService] Starting background fetch/cache for item details:', identifiers);
+        const { pubkeys, eventIds, coordinates } = identifiers;
+
+        const pubkeysToFetch: string[] = [];
+        const eventIdsToFetch: string[] = [];
+        const coordsToFetch: { kind: number; pubkey: string; dTag: string }[] = [];
+
+        try {
+            // 1. Check local cache
+            for (const pk of new Set(pubkeys)) { // Use Set to avoid duplicate checks/fetches
+                if (!(await localDb.getProfile(pk))) {
+                    pubkeysToFetch.push(pk);
+                }
+            }
+            for (const id of new Set(eventIds)) {
+                if (!(await localDb.getEventById(id))) {
+                    eventIdsToFetch.push(id);
+                }
+            }
+            for (const coord of new Set(coordinates)) {
+                try {
+                    const parts = coord.split(':');
+                    if (parts.length >= 3) {
+                        const kind = parseInt(parts[0], 10);
+                        const pubkey = parts[1];
+                        const dTag = parts.slice(2).join(':'); // Handle dTags with colons
+                        if (!isNaN(kind) && pubkey && dTag) {
+                            if (!(await localDb.getLatestEventByCoord(kind, pubkey, dTag))) {
+                                coordsToFetch.push({ kind, pubkey, dTag });
+                            }
+                        } else {
+                             console.warn(`[NdkService] Invalid coordinate format during cache check: ${coord}`);
+                        }
+                    } else {
+                         console.warn(`[NdkService] Invalid coordinate format during cache check: ${coord}`);
+                    }
+                } catch (e) {
+                    console.error(`[NdkService] Error processing coordinate ${coord} during cache check:`, e);
+                }
+            }
+
+            console.log('[NdkService] Needs fetch - Pubkeys:', pubkeysToFetch, 'Event IDs:', eventIdsToFetch, 'Coords:', coordsToFetch);
+
+            if (pubkeysToFetch.length === 0 && eventIdsToFetch.length === 0 && coordsToFetch.length === 0) {
+                console.log('[NdkService] No network fetches required for item details.');
+                return;
+            }
+
+            // 2. Build Filters & Fetch
+            const fetchPromises: Promise<Set<NDKEvent>>[] = [];
+
+            if (pubkeysToFetch.length > 0) {
+                const profileFilter: NDKFilter = { kinds: [0], authors: pubkeysToFetch };
+                // Use internal fetchEvents which ensures connection
+                fetchPromises.push(this.fetchEvents(profileFilter));
+            }
+            if (eventIdsToFetch.length > 0) {
+                const eventFilter: NDKFilter = { ids: eventIdsToFetch };
+                fetchPromises.push(this.fetchEvents(eventFilter));
+            }
+            // Fetch coordinates individually for simplicity
+            coordsToFetch.forEach(coord => {
+                const coordFilter: NDKFilter = {
+                    kinds: [coord.kind],
+                    authors: [coord.pubkey],
+                    '#d': [coord.dTag]
+                };
+                fetchPromises.push(this.fetchEvents(coordFilter));
+            });
+
+            // 3. Execute Fetches and Cache Results
+            console.log(`[NdkService] Executing ${fetchPromises.length} background fetch operations...`);
+            const results = await Promise.allSettled(fetchPromises);
+            console.log('[NdkService] Background fetch operations settled.');
+
+            for (const result of results) {
+                if (result.status === 'fulfilled') {
+                    const fetchedEvents = result.value;
+                    if (fetchedEvents.size > 0) {
+                        console.log(`[NdkService] Caching ${fetchedEvents.size} fetched events...`);
+                         for (const event of fetchedEvents) {
+                             const storedEvent: StoredEvent = {
+                                 id: event.id,
+                                 kind: event.kind,
+                                 pubkey: event.pubkey,
+                                 created_at: event.created_at ?? 0,
+                                 tags: event.tags,
+                                 content: event.content,
+                                 sig: event.sig ?? '',
+                                 published: true, // Mark as published since it came from network
+                                 dTag: event.replaceableDTag() || undefined, // Use NDK helper, ensure undefined if null
+                                 // rawEvent: JSON.stringify(event.rawEvent()) // Optional
+                             };
+
+                            // Use appropriate localDb method
+                             if (storedEvent.kind === 0) {
+                                 await localDb.addOrUpdateProfile(storedEvent); // This also calls addOrUpdateEvent
+                             } else {
+                                 await localDb.addOrUpdateEvent(storedEvent);
+                             }
+                         }
+                    }
+                } else {
+                    console.error('[NdkService] A background fetch operation failed:', result.reason);
+                }
+            }
+            console.log('[NdkService] Finished caching fetched events.');
+        } catch (error) {
+            console.error('[NdkService] Error during background fetch/cache process:', error);
+        }
+    }
+
+    /**
      * Gets the current connection status.
      * Note: This reflects the status after the last connect() attempt.
      * For real-time status, NDK pool listeners might be needed.

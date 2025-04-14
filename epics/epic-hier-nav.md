@@ -151,3 +151,19 @@
 * Ensure the `@tailwindcss/typography` plugin is configured and applied to the container rendering the HTML.
 
 ---
+
+### HIER-STORY-015: Display and Distinguish External List Items
+
+* **As a user,** I want to see the items contained within a linked external list when I expand that list node, and **I want the header of external lists to be visually distinct** so that I can easily browse the full curated content and understand list ownership at a glance.
+
+**Acceptance Criteria:**
+
+* **AC 1:** Given I expand a `TreeNode` representing a linked external list (`a` tag, where `node.pubkey !== currentUserPubkey`), if the items for that list are not already loaded locally, then a fetch is initiated for the list's items.
+* **AC 2:** A loading indicator is displayed within the expanded node while the items are being fetched.
+* **AC 3:** Upon successful fetch, the items (`p`, `e`, `a`, `nip05` tags) contained within the linked list are rendered below the list node header, using the appropriate existing components (`ItemWrapper`, etc.), similar to how items are displayed for locally owned lists.
+* **AC 4:** If fetching the items fails, an appropriate error message is displayed within the expanded node.
+* **AC 5:** This item loading respects existing cycle detection and maximum depth limits.
+* **AC 6 (New):** When a `TreeNode` representing a linked external list (`node.pubkey !== currentUserPubkey`) is displayed, its header (`NodeHeader`) applies distinct styling (e.g., a slightly different background color using `bg-base-300/30` or similar subtle class) compared to locally owned lists.
+* **AC 7 (New):** The displayed name in the `NodeHeader` for an external list includes an explicit suffix label (e.g., append " (External)" to the list name `node.name`).
+
+---

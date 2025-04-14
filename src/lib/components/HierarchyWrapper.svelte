@@ -8,6 +8,7 @@
     export let nip05VerificationStates: { [id: string]: Nip05VerificationStateType } = {};
     export let isHierarchyLoading: boolean = true; // Pass loading state
     export let isLoadingInitialLists: boolean = true; // Pass loading state
+    export let currentUserPubkey: string | null = null; // Added prop
 
     let showAddItemModal = false;
     let addItemParentId: string | null = null;
@@ -67,6 +68,7 @@
             <TreeNode 
                 node={rootNode} 
                 verificationStates={nip05VerificationStates}
+                currentUserPubkey={currentUserPubkey}
                 on:selectnode={forwardEvent}
                 on:toggleexpand={forwardEvent}
                 on:additem={forwardEvent}
@@ -82,7 +84,7 @@
                 on:viewfeed={forwardViewFeed}
                 on:checknip05={forwardEvent}
                 depth={0}
-                isRootNode={true} />
+            />
         {/each}
     </div>
 {:else}

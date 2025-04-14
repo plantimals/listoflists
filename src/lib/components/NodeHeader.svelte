@@ -14,6 +14,7 @@
   export let isEditingName: boolean = false;
   export let editedName: string = '';
   export let inputRef: HTMLInputElement | null = null; // For focusing the input
+  export let currentUserPubkey: string | null = null; // Added prop
 
   // Dispatch only events controlled by NodeHeader itself
   const dispatch = createEventDispatcher<{
@@ -24,6 +25,7 @@
   }>();
 
   $: indent = depth * 1.5; // 1.5rem per depth level
+  $: isExternal = !!(currentUserPubkey && node.pubkey && node.pubkey !== currentUserPubkey);
 
   console.log('Component initialized:', 'NodeHeader');
 
@@ -52,6 +54,8 @@
 <!-- Main row for the node -->
 <div
     class="flex items-center justify-between group py-1 pl-2 pr-1 rounded hover:bg-base-200 transition-colors duration-100 cursor-pointer relative"
+    class:bg-base-300={isExternal}
+    class:bg-opacity-30={isExternal}
     style="padding-left: calc({indent}rem + 0.5rem);"
 >
     <div class="flex items-center space-x-2 flex-grow min-w-0" on:click={handleNodeClick}>
@@ -78,7 +82,13 @@
                 autofocus
             />
         {:else}
-            <span class="truncate" title={node.name}>{node.name}</span>
+            <!-- Display name with conditional (External) label -->
+            <span class="truncate" title="{node.name}{isExternal ? ' (External)' : ''}">
+                {node.name}
+                {#if isExternal}
+                    <span class="text-xs opacity-70 ml-1">(External)</span>
+                {/if}
+            </span>
         {/if}
     </div>
 
