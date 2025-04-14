@@ -4,7 +4,7 @@
     import type { TreeNodeData, ListItem, Nip05VerificationStateType } from '$lib/types'; // Corrected import and type name
     // Removed UserItem import
     // Removed NoteItem import
-    import NodeHeader from './NodeHeader.svelte'; // Import the new header component
+    import NodeHeader from '$lib/components/NodeHeader.svelte'; // Use $lib alias for import
     import NodeActions from './NodeActions.svelte'; // Import the new actions component
     import NodeItemsList from '$lib/components/NodeItemsList.svelte'; // Use $lib alias for import
     import { get } from 'svelte/store';
@@ -143,7 +143,8 @@
         loadExternalItems();
     }
 
-    function toggleExpand() {
+    // Make function exportable for testing
+    export function toggleExpand() {
         expanded = !expanded;
         console.log(`TreeNode ${node.id}: Expanded set to ${expanded}`);
     }

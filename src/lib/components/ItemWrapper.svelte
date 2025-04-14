@@ -83,7 +83,10 @@
 
 </script>
 
-<div class="flex items-center py-1 hover:bg-base-300 rounded text-sm">
+<div 
+    class="flex items-center py-1 hover:bg-base-300 rounded text-sm" 
+    data-testid="item-wrapper"
+>
     <!-- Item Display Logic -->
     {#if item.type === 'p'}
         <UserItem pubkey={item.value} on:viewprofile={(event) => dispatch('viewprofile', event.detail)} />

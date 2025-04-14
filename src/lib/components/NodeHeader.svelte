@@ -58,15 +58,20 @@
     class:bg-opacity-30={isExternal}
     style="padding-left: calc({indent}rem + 0.5rem);"
 >
-    <div class="flex items-center space-x-2 flex-grow min-w-0" on:click={handleNodeClick}>
+    <!-- Change this div to a button for accessibility -->
+    <button 
+        type="button"
+        class="flex items-center space-x-2 flex-grow min-w-0 text-left" 
+        on:click={handleNodeClick}
+    >
         {#if (node.children && node.children.length > 0) || (node.items && node.items.length > 0)}
-            <button
+            <!-- Changed inner button to a span, removed click handler -->
+            <span
                 class="btn btn-ghost btn-xs p-0 -ml-1 text-base-content/50 hover:text-base-content"
-                on:click|stopPropagation={() => dispatch('toggle')}
-                title={isExpanded ? 'Collapse' : 'Expand'}
+                title={isExpanded ? 'Collapse' : 'Expand'} 
             >
                 <Icon src={isExpanded ? ChevronDown : ChevronRight} class="w-4 h-4" />
-            </button>
+            </span>
         {:else}
             <span class="w-4 h-4 inline-block"></span> 
         {/if}
@@ -79,7 +84,6 @@
                 class="input input-bordered input-xs w-full"
                 on:keydown={handleKeyDown}
                 on:blur={() => dispatch('canceledit')}
-                autofocus
             />
         {:else}
             <!-- Display name with conditional (External) label -->
@@ -90,7 +94,7 @@
                 {/if}
             </span>
         {/if}
-    </div>
+    </button> <!-- End of the new button -->
 
     <!-- Badges -->
     <div class="flex items-center flex-shrink-0 space-x-1 ml-auto">
