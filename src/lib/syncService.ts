@@ -5,6 +5,10 @@ import { get } from 'svelte/store';
 // Adjust specific types as needed later - NDKEvent needed for reconstruction
 import type { NDKFilter, NDKRelay, NDKUserProfile } from '@nostr-dev-kit/ndk'; // Keep type-only imports separate
 import { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk'; // Import values separately
+// import { sleep } from '$lib/utils'; // Assuming a sleep utility exists or will be added
+
+// Simple sleep utility function
+const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * Handles synchronization logic between local storage (IndexedDB) and Nostr relays.
@@ -19,8 +23,11 @@ export class SyncService {
 	 * @param pubkey - The public key of the user whose data to sync.
 	 * @returns Promise<boolean> - Indicates if a UI refresh might be needed due to changes.
 	 */
-	private async syncIncoming(pubkey: string): Promise<boolean> {
+	private async syncIncoming(pubkey: string): Promise<{ refreshNeeded: boolean; errorsOccurred: boolean }> {
 		let refreshNeeded = false;
+		let encounteredError = false; // Track internal errors
+		const MAX_FETCH_ATTEMPTS = 2;
+		const FETCH_RETRY_DELAY_MS = 1500;
 		console.log('SyncService Phase 1: Starting Incoming Sync for pubkey:', pubkey);
 
 		try {
@@ -48,14 +55,39 @@ export class SyncService {
 				since: since > 0 ? since : undefined // NDK expects undefined, not 0, for no lower bound
 			};
 
-			// 3. Fetch events from relays
-			console.log('SyncService Phase 1: Fetching events with filter:', filter);
-			const fetchedEvents = await ndkService.fetchEvents(filter);
-			console.log(`SyncService Phase 1: Fetched ${fetchedEvents.size} events.`);
+			// 3. Fetch events from relays with retry
+			let fetchedEvents: Set<NDKEvent> = new Set();
+			let fetchAttempt = 0;
+			let lastFetchError: unknown = null;
+
+			while (fetchAttempt < MAX_FETCH_ATTEMPTS) {
+				fetchAttempt++;
+				try {
+					console.log(`SyncService Phase 1: Attempt ${fetchAttempt}/${MAX_FETCH_ATTEMPTS} - Fetching events with filter:`, filter);
+					fetchedEvents = await ndkService.fetchEvents(filter);
+					console.log(`SyncService Phase 1: Attempt ${fetchAttempt} - Fetched ${fetchedEvents.size} events.`);
+					lastFetchError = null; // Clear error on success
+					break; // Exit loop on success
+				} catch (error) {
+					lastFetchError = error;
+					console.warn(`SyncService Phase 1: Attempt ${fetchAttempt} failed:`, error);
+					if (fetchAttempt < MAX_FETCH_ATTEMPTS) {
+						console.log(`SyncService Phase 1: Retrying fetch after ${FETCH_RETRY_DELAY_MS}ms...`);
+						await sleep(FETCH_RETRY_DELAY_MS); // Use a utility sleep function
+					}
+				}
+			}
+
+			// If all attempts failed, throw the last error
+			if (lastFetchError) {
+				console.error(`SyncService Phase 1: All fetch attempts failed.`);
+				encounteredError = true; // Mark error occurred before throwing
+				throw lastFetchError; // Propagate the error after retries
+			}
 
 			if (fetchedEvents.size === 0) {
 				console.log('SyncService Phase 1: No new incoming events found.');
-				return false; // No refresh needed if nothing new was fetched
+				return { refreshNeeded: false, errorsOccurred: false }; // No refresh, no errors
 			}
 
 			// 4. Process and store fetched events
@@ -74,27 +106,28 @@ export class SyncService {
 					};
 
 					await localDb.addOrUpdateEvent(storedEvent);
-					// Since addOrUpdateEvent returns void, we assume a refresh is needed
-					// if we successfully processed and attempted to store an event.
 					refreshNeeded = true;
 					console.log(`SyncService Phase 1: Processed/Stored event ${event.kind}:${event.id}`);
 
 				} catch (storeError) {
+					encounteredError = true; // Mark internal error
 					console.error(
-						`SyncService Phase 1: Error processing/storing event ${event.id}:`,
+						`SyncService Phase 1: Error processing/storing event ${event.kind}:${event.id}:`,
 						storeError
 					);
 					// Continue processing other events even if one fails
 				}
 			}
 
-			console.log('SyncService Phase 1: Finished processing incoming events. Refresh needed:', refreshNeeded);
+			console.log('SyncService Phase 1: Finished processing incoming events. Refresh needed:', refreshNeeded, 'Errors:', encounteredError);
 		} catch (error) {
-			console.error('SyncService Phase 1: Error during incoming sync:', error);
-			return false; // Return false in case of major errors during the process
+			encounteredError = true; // Mark error occurred
+			console.error('SyncService Phase 1: Error during incoming sync after retries:', error);
+			// Don't re-throw, let performSync handle the overall status
+			return { refreshNeeded: false, errorsOccurred: true }; // Indicate failure
 		}
 
-		return refreshNeeded;
+		return { refreshNeeded, errorsOccurred: encounteredError };
 	}
 
 	/**
@@ -102,8 +135,9 @@ export class SyncService {
 	 * @param pubkey - The public key of the user whose data to publish.
 	 * @returns Promise<boolean> - Indicates if a UI refresh might be needed (e.g., after successful publish confirmation).
 	 */
-	private async syncOutgoing(pubkey: string): Promise<boolean> {
+	private async syncOutgoing(pubkey: string): Promise<{ publishedSomething: boolean; errorsOccurred: boolean }> {
 		let publishedSomething = false;
+		let encounteredError = false; // Track if any publish error occurred
 		console.log('SyncService Phase 2: Starting Outgoing Sync for pubkey:', pubkey);
 
 		try {
@@ -113,7 +147,7 @@ export class SyncService {
 
 			if (unpublishedEvents.length === 0) {
 				console.log('SyncService Phase 2: No outgoing events to publish.');
-				return false; // Nothing to do
+				return { publishedSomething: false, errorsOccurred: false }; // Nothing to do, no errors
 			}
 
 			// 2. Loop through unpublished events and attempt to publish
@@ -148,70 +182,106 @@ export class SyncService {
 						console.log(`SyncService Phase 2: Marked event ${storedEvent.id} as published locally.`);
 						publishedSomething = true; // Set flag since we published and marked
 					} else {
-						console.warn(`SyncService Phase 2: Event ${storedEvent.id} was not published to any relays (maybe already seen or relay issues?).`);
-						// Consider if we should retry or handle this case differently.
-						// For now, we don't mark it as published if ndkService reported 0 relays.
+						console.warn(`SyncService Phase 2: Event ${storedEvent.kind}:${storedEvent.id} was not published to any relays (maybe already seen or relay issues?). Will retry next cycle.`);
+						// Event remains marked as unpublished implicitly
+						// Consider this a soft error? For now, we don't set encounteredError here.
 					}
-				} catch (publishError) {
-					console.error(`SyncService Phase 2: Error publishing event ${storedEvent.id}:`, publishError);
+				} catch (error) {
+					encounteredError = true; // Mark that an error occurred
+					console.error(`SyncService Phase 2: Error processing unpublished event ${storedEvent.kind}:${storedEvent.id}. Will retry next cycle. Error:`, error);
 					// Continue with the next event even if one fails
 				}
 			} // End of loop
 
 		} catch (fetchError) {
+			encounteredError = true; // Mark that an error occurred
 			console.error('SyncService Phase 2: Failed to fetch unpublished events:', fetchError);
-			return false; // Cannot proceed if we can't get the events
+			// Don't re-throw, let performSync handle the overall status
+			return { publishedSomething: false, errorsOccurred: true }; // Indicate critical failure here
 		}
 
-		console.log('SyncService Phase 2: Finished Outgoing Sync. Published something:', publishedSomething);
-		return publishedSomething;
+		console.log(`SyncService Phase 2: Finished Outgoing Sync. Published something: ${publishedSomething}. Encountered errors: ${encounteredError}`);
+		return { publishedSomething, errorsOccurred: encounteredError };
 	}
 
 	/**
 	 * Performs a full synchronization cycle (incoming and outgoing).
+	 * Provides a summary log of success/failure for each phase.
 	 * @param options - Optional parameters for the sync operation.
 	 * @param options.isInitialSync - True if this is the first sync after login/startup.
-	 * @returns Promise<boolean> - Indicates if an overall UI refresh might be needed.
+	 * @returns Promise<{success: boolean; message: string}> - Indicates overall success and provides a status message.
 	 */
-	public async performSync(options?: { isInitialSync?: boolean }): Promise<boolean> {
-		// Get Pubkey
+	public async performSync(options?: { isInitialSync?: boolean }): Promise<{ success: boolean; message: string }> {
 		const pubkey = get(user)?.pubkey;
 		if (!pubkey) {
-			console.error("[SyncService] Cannot perform sync: User not logged in.");
-			return false; // Cannot sync without a user
+			const message = "[SyncService] Cannot perform sync: User not logged in.";
+			console.error(message);
+			return { success: false, message };
 		}
 
-		// Initialize Flag
+		console.log(`[SyncService] Starting performSync for ${pubkey}...`);
 		let overallRefreshNeeded = false;
+		let incomingPhaseCompleted = false;
+		let outgoingPhaseCompleted = false;
+		let incomingHadInternalErrors = false;
+		let outgoingHadInternalErrors = false;
+		let incomingCaughtError: unknown = null; // Renamed for clarity
+		let outgoingCaughtError: unknown = null; // Renamed for clarity
 
-		// Call Phase 1 (Incoming)
+		// Phase 1: Incoming
 		try {
 			console.log(`[SyncService] Running syncIncoming for ${pubkey}...`);
-			const incomingRefresh = await this.syncIncoming(pubkey);
-			if (incomingRefresh) {
+			const incomingResult = await this.syncIncoming(pubkey);
+			incomingPhaseCompleted = true; // Reached end of try block
+			incomingHadInternalErrors = incomingResult.errorsOccurred;
+			if (incomingResult.refreshNeeded) {
 				overallRefreshNeeded = true;
 				console.log("[SyncService] syncIncoming indicated refresh needed.");
 			}
+			console.log(`[SyncService] syncIncoming phase completed. Internal errors: ${incomingHadInternalErrors}`);
 		} catch (error) {
-			console.error("[SyncService] Error during syncIncoming phase:", error);
-			// Continue to outgoing phase even if incoming fails
+			incomingCaughtError = error; // Capture error thrown up
+			console.error("[SyncService] Error during syncIncoming phase execution:", error);
+			// Phase technically didn't complete successfully if error thrown up
 		}
 
-		// Call Phase 2 (Outgoing)
+		// Phase 2: Outgoing
 		try {
 			console.log(`[SyncService] Running syncOutgoing for ${pubkey}...`);
-			const outgoingRefresh = await this.syncOutgoing(pubkey);
-			if (outgoingRefresh) {
-				overallRefreshNeeded = true;
-				console.log("[SyncService] syncOutgoing indicated refresh needed.");
+			const outgoingResult = await this.syncOutgoing(pubkey);
+			outgoingPhaseCompleted = true; // Reached end of try block
+			outgoingHadInternalErrors = outgoingResult.errorsOccurred;
+			if (outgoingResult.publishedSomething) {
+				overallRefreshNeeded = true; // Use publishedSomething for refresh hint
+				console.log("[SyncService] syncOutgoing indicated potential refresh needed (published).");
 			}
+			console.log(`[SyncService] syncOutgoing phase completed. Internal errors: ${outgoingHadInternalErrors}`);
 		} catch (error) {
-			console.error("[SyncService] Error during syncOutgoing phase:", error);
+			outgoingCaughtError = error; // Capture error thrown up
+			console.error("[SyncService] Error during syncOutgoing phase execution:", error);
+			// Phase technically didn't complete successfully if error thrown up
 		}
 
 		// Log & Return Result
-		console.log(`[SyncService] performSync completed. Overall refresh needed: ${overallRefreshNeeded}`);
-		return overallRefreshNeeded;
+		// *** New Overall Success Logic ***
+		const overallSuccess = !incomingCaughtError && !outgoingCaughtError && !incomingHadInternalErrors && !outgoingHadInternalErrors;
+
+		let message = `[SyncService] performSync completed for ${pubkey}. Overall Status: ${overallSuccess ? 'Success' : 'Failed'}.`;
+		// Add detail about phase completion status based on flags
+		message += ` Incoming phase ran: ${incomingPhaseCompleted}. Outgoing phase ran: ${outgoingPhaseCompleted}. Refresh suggested: ${overallRefreshNeeded}.`;
+
+		if (incomingCaughtError) message += ` Incoming Caught Error: ${incomingCaughtError instanceof Error ? incomingCaughtError.message : String(incomingCaughtError)}.`;
+		if (outgoingCaughtError) message += ` Outgoing Caught Error: ${outgoingCaughtError instanceof Error ? outgoingCaughtError.message : String(outgoingCaughtError)}.`;
+		if (incomingHadInternalErrors) message += ` Incoming Internal Errors: Yes.`;
+		if (outgoingHadInternalErrors) message += ` Outgoing Internal Errors: Yes.`;
+
+		console.log(message);
+
+		// Return more structured result
+		return {
+			success: overallSuccess,
+			message: overallSuccess ? 'Sync completed.' : 'Sync encountered errors. Check logs for details.' + (overallRefreshNeeded ? ' Some updates may have occurred.' : '')
+		};
 	}
 }
 

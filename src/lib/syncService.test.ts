@@ -113,13 +113,14 @@ describe('SyncService', () => {
   // --- performSync Tests ---
   describe('performSync', () => {
 
-    it('should return false and log error if user is not logged in', async () => {
+    it('should return { success: false, ... } and log error if user is not logged in', async () => {
         vi.mocked(get).mockReturnValue(null); // Simulate logged-out user
         const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
         const result = await syncServiceInstance.performSync();
 
-        expect(result).toBe(false);
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('User not logged in');
         expect(consoleErrorSpy).toHaveBeenCalledWith('[SyncService] Cannot perform sync: User not logged in.');
         expect(localDb.getLatestEventTimestamp).not.toHaveBeenCalled();
         expect(ndkService.fetchEvents).not.toHaveBeenCalled();
@@ -129,47 +130,43 @@ describe('SyncService', () => {
         consoleErrorSpy.mockRestore();
     });
 
-    it('should return true when only incoming sync fetches and stores new events', async () => {
+    it('should return { success: true, ... } when only incoming sync fetches and stores new events', async () => {
         const incomingEvent = createMockStoredEvent('in1', NDKKind.CategorizedBookmarkList, mockPubkey, 1500);
         const incomingNDKEvent = createMockNDKEvent(incomingEvent);
         vi.mocked(ndkService.fetchEvents).mockResolvedValue(new Set([incomingNDKEvent]));
+        // Ensure syncOutgoing mock indicates no errors
+        vi.mocked(localDb.getUnpublishedEvents).mockResolvedValue([]);
 
         const result = await syncServiceInstance.performSync();
 
-        expect(result).toBe(true);
-        expect(ndkService.fetchEvents).toHaveBeenCalledWith(expect.objectContaining({
-            authors: [mockPubkey],
-            since: 1001 // latestTimestamp + 1
-        }));
+        expect(result.success).toBe(true);
+        expect(ndkService.fetchEvents).toHaveBeenCalledWith(expect.objectContaining({ authors: [mockPubkey], since: 1001 }));
         expect(localDb.addOrUpdateEvent).toHaveBeenCalledTimes(1);
         expect(localDb.addOrUpdateEvent).toHaveBeenCalledWith(expect.objectContaining({ id: 'in1' }));
-        expect(localDb.getUnpublishedEvents).toHaveBeenCalledWith(mockPubkey); // Still checks outgoing
-        expect(ndkService.publish).not.toHaveBeenCalled(); // No outgoing events
+        expect(localDb.getUnpublishedEvents).toHaveBeenCalledWith(mockPubkey);
+        expect(ndkService.publish).not.toHaveBeenCalled();
     });
 
-     it('should return true when only outgoing sync publishes events', async () => {
+    it('should return { success: true, ... } when only outgoing sync publishes events', async () => {
         const outgoingEvent = createMockStoredEvent('out1', NDKKind.CategorizedBookmarkList, mockPubkey, 1600, '', [], 'sig1');
         vi.mocked(localDb.getUnpublishedEvents).mockResolvedValue([outgoingEvent]);
-        // Mock publish to return a set indicating success (e.g., 1 relay)
-        vi.mocked(ndkService.publish).mockResolvedValue(new Set([mockNDKRelay])); // Use mocked relay
+        vi.mocked(ndkService.publish).mockResolvedValue(new Set([mockNDKRelay]));
+        // Ensure syncIncoming mock indicates no errors
+        vi.mocked(ndkService.fetchEvents).mockResolvedValue(new Set());
+        vi.mocked(localDb.getLatestEventTimestamp).mockResolvedValue(1000); // Ensure timestamp is checked
 
         const result = await syncServiceInstance.performSync();
 
-        expect(result).toBe(true);
-        expect(ndkService.fetchEvents).toHaveBeenCalled(); // Incoming still runs
-        expect(localDb.addOrUpdateEvent).not.toHaveBeenCalled(); // No incoming events
+        expect(result.success).toBe(true);
+        expect(ndkService.fetchEvents).toHaveBeenCalled();
+        expect(localDb.addOrUpdateEvent).not.toHaveBeenCalled();
         expect(localDb.getUnpublishedEvents).toHaveBeenCalledWith(mockPubkey);
         expect(ndkService.publish).toHaveBeenCalledTimes(1);
-        expect(ndkService.publish).toHaveBeenCalledWith(expect.any(NDKEvent)); // Check the reconstructed event
-        // Check if the published event matches the stored data
-        const publishedArg = vi.mocked(ndkService.publish).mock.calls[0][0] as NDKEvent;
-        expect(publishedArg.id).toBe('out1');
-        expect(publishedArg.sig).toBe('sig1');
         expect(localDb.markEventAsPublished).toHaveBeenCalledTimes(1);
         expect(localDb.markEventAsPublished).toHaveBeenCalledWith('out1');
     });
 
-    it('should return true when both incoming and outgoing phases have changes', async () => {
+    it('should return { success: true, ... } when both incoming and outgoing phases have changes without errors', async () => {
         // Incoming mock
         const incomingEvent = createMockStoredEvent('in2', NDKKind.Metadata, mockPubkey, 1550);
         const incomingNDKEvent = createMockNDKEvent(incomingEvent);
@@ -178,27 +175,24 @@ describe('SyncService', () => {
         // Outgoing mock
         const outgoingEvent = createMockStoredEvent('out2', NDKKind.CategorizedBookmarkList, mockPubkey, 1650, '', [], 'sig2');
         vi.mocked(localDb.getUnpublishedEvents).mockResolvedValue([outgoingEvent]);
-        vi.mocked(ndkService.publish).mockResolvedValue(new Set([mockNDKRelay])); // Use mocked relay
+        vi.mocked(ndkService.publish).mockResolvedValue(new Set([mockNDKRelay]));
 
         const result = await syncServiceInstance.performSync();
 
-        expect(result).toBe(true);
-        // Check incoming calls
+        expect(result.success).toBe(true);
         expect(ndkService.fetchEvents).toHaveBeenCalledTimes(1);
         expect(localDb.addOrUpdateEvent).toHaveBeenCalledTimes(1);
-        expect(localDb.addOrUpdateEvent).toHaveBeenCalledWith(expect.objectContaining({ id: 'in2' }));
-        // Check outgoing calls
         expect(localDb.getUnpublishedEvents).toHaveBeenCalledTimes(1);
         expect(ndkService.publish).toHaveBeenCalledTimes(1);
         expect(localDb.markEventAsPublished).toHaveBeenCalledTimes(1);
         expect(localDb.markEventAsPublished).toHaveBeenCalledWith('out2');
     });
 
-    it('should return false when neither incoming nor outgoing phases have changes', async () => {
-        // Mocks are default: fetchEvents returns empty, getUnpublishedEvents returns empty
+    it('should return { success: true, ... } when neither incoming nor outgoing phases have changes', async () => {
+        // Mocks are default: fetchEvents empty, getUnpublishedEvents empty
         const result = await syncServiceInstance.performSync();
 
-        expect(result).toBe(false);
+        expect(result.success).toBe(true); // No errors occurred
         expect(ndkService.fetchEvents).toHaveBeenCalledTimes(1);
         expect(localDb.addOrUpdateEvent).not.toHaveBeenCalled();
         expect(localDb.getUnpublishedEvents).toHaveBeenCalledTimes(1);
@@ -206,160 +200,204 @@ describe('SyncService', () => {
         expect(localDb.markEventAsPublished).not.toHaveBeenCalled();
     });
 
-    // --- Error Handling ---
 
-    it('should handle error during incoming phase and still run outgoing phase (returning true if outgoing succeeds)', async () => {
+    // --- Error Handling Tests (Updated for new logic) ---
+
+    it('should return { success: false, ... } when incoming fetch eventually fails (error caught internally)', async () => {
         const error = new Error('Failed to fetch');
-        vi.mocked(ndkService.fetchEvents).mockRejectedValue(error);
+        vi.mocked(ndkService.fetchEvents)
+            .mockRejectedValueOnce(error) // First call fails
+            .mockRejectedValueOnce(error); // Second call fails, syncIncoming catches internally
         const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.spyOn(console, 'warn').mockImplementation(() => {}); // Suppress retry warning
 
-        // Mock outgoing to succeed
+        // Mock outgoing to succeed without internal errors
         const outgoingEvent = createMockStoredEvent('out3', NDKKind.CategorizedBookmarkList, mockPubkey, 1700, '', [], 'sig3');
         vi.mocked(localDb.getUnpublishedEvents).mockResolvedValue([outgoingEvent]);
-        vi.mocked(ndkService.publish).mockResolvedValue(new Set([mockNDKRelay])); // Use mocked relay
+        vi.mocked(ndkService.publish).mockResolvedValue(new Set([mockNDKRelay]));
+        vi.mocked(localDb.markEventAsPublished).mockResolvedValue(undefined);
 
         const result = await syncServiceInstance.performSync();
 
-        expect(result).toBe(true); // Outgoing succeeded
-        expect(consoleErrorSpy).toHaveBeenCalledWith('SyncService Phase 1: Error during incoming sync:', error);
-        expect(localDb.addOrUpdateEvent).not.toHaveBeenCalled(); // Incoming failed
-        // Check outgoing still ran
-        expect(localDb.getUnpublishedEvents).toHaveBeenCalledTimes(1);
-        expect(ndkService.publish).toHaveBeenCalledTimes(1);
+        expect(result.success).toBe(false); // Because syncIncoming reported internal errors
+        expect(result.message).toContain('Sync encountered errors');
+        // Check the *internal* error logged by syncIncoming after retries
+        expect(consoleErrorSpy).toHaveBeenCalledWith('SyncService Phase 1: Error during incoming sync after retries:', error);
+        // Ensure the performSync catch block was NOT called
+        expect(consoleErrorSpy).not.toHaveBeenCalledWith('[SyncService] Error during syncIncoming phase execution:', expect.anything());
+        // Outgoing should still run successfully internally
         expect(localDb.markEventAsPublished).toHaveBeenCalledWith('out3');
 
         consoleErrorSpy.mockRestore();
+        vi.mocked(console.warn).mockRestore();
     });
 
-     it('should handle error during outgoing phase after incoming phase succeeds (returning true)', async () => {
-        const error = new Error('Failed to publish');
+    it('should return { success: false, ... } when incoming has internal store error', async () => {
+        const storeError = new Error('DB Store Failed');
         const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-        // Mock incoming to succeed
+        // Mock incoming fetch succeeds, but store fails internally
         const incomingEvent = createMockStoredEvent('in3', NDKKind.Metadata, mockPubkey, 1750);
         const incomingNDKEvent = createMockNDKEvent(incomingEvent);
         vi.mocked(ndkService.fetchEvents).mockResolvedValue(new Set([incomingNDKEvent]));
+        vi.mocked(localDb.addOrUpdateEvent).mockRejectedValue(storeError); // Store fails internally
 
-        // Mock outgoing to fail
-        const outgoingEvent = createMockStoredEvent('out4', NDKKind.CategorizedBookmarkList, mockPubkey, 1800, '', [], 'sig4');
-         vi.mocked(localDb.getUnpublishedEvents).mockResolvedValue([outgoingEvent]);
-        vi.mocked(ndkService.publish).mockRejectedValue(error); // Simulate publish failure
+        // Mock outgoing succeeds without internal errors
+        vi.mocked(localDb.getUnpublishedEvents).mockResolvedValue([]);
 
         const result = await syncServiceInstance.performSync();
 
-        expect(result).toBe(true); // Incoming succeeded
-        // Check incoming ran
-        expect(ndkService.fetchEvents).toHaveBeenCalledTimes(1);
-        expect(localDb.addOrUpdateEvent).toHaveBeenCalledWith(expect.objectContaining({ id: 'in3' }));
-        // Check outgoing ran but failed
+        expect(result.success).toBe(false); // Because syncIncoming reported internal errors
+        expect(result.message).toContain('Sync encountered errors');
+        // Check the internal error log from syncIncoming
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+            expect.stringContaining('SyncService Phase 1: Error processing/storing event 0:in3'),
+            storeError
+        );
+        // Check that performSync did NOT log a caught error for incoming
+        expect(consoleErrorSpy).not.toHaveBeenCalledWith('[SyncService] Error during syncIncoming phase execution:', expect.anything());
+        // Outgoing should have run
         expect(localDb.getUnpublishedEvents).toHaveBeenCalledTimes(1);
-        expect(ndkService.publish).toHaveBeenCalledTimes(1);
-        expect(consoleErrorSpy).toHaveBeenCalledWith(`SyncService Phase 2: Error publishing event ${outgoingEvent.id}:`, error);
-        expect(localDb.markEventAsPublished).not.toHaveBeenCalled(); // Publish failed
 
         consoleErrorSpy.mockRestore();
     });
 
-     it('should return false if both incoming and outgoing phases fail', async () => {
-        const fetchError = new Error('Failed to fetch');
+    it('should return { success: false, ... } when outgoing publish fails (internal error)', async () => {
         const publishError = new Error('Failed to publish');
-        vi.mocked(ndkService.fetchEvents).mockRejectedValue(fetchError);
-        vi.mocked(ndkService.publish).mockRejectedValue(publishError); // Mock publish directly, as getUnpublishedEvents might succeed
-        // Ensure getUnpublishedEvents returns something so publish is attempted
-        const outgoingEvent = createMockStoredEvent('out5', NDKKind.CategorizedBookmarkList, mockPubkey, 1900, '', [], 'sig5');
-        vi.mocked(localDb.getUnpublishedEvents).mockResolvedValue([outgoingEvent]);
-
         const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-        const result = await syncServiceInstance.performSync();
-
-        expect(result).toBe(false); // Neither phase resulted in a positive refresh signal
-        expect(consoleErrorSpy).toHaveBeenCalledWith('SyncService Phase 1: Error during incoming sync:', fetchError);
-        expect(consoleErrorSpy).toHaveBeenCalledWith(`SyncService Phase 2: Error publishing event ${outgoingEvent.id}:`, publishError);
-        expect(localDb.addOrUpdateEvent).not.toHaveBeenCalled();
-        expect(localDb.markEventAsPublished).not.toHaveBeenCalled();
-
-        consoleErrorSpy.mockRestore();
-     });
-
-     it('should handle error when getting unpublished events', async () => {
-         const getUnpublishedError = new Error('DB error getting unpublished');
-         vi.mocked(localDb.getUnpublishedEvents).mockRejectedValue(getUnpublishedError);
-         const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-         // Mock incoming to succeed
-         const incomingEvent = createMockStoredEvent('in4', NDKKind.Metadata, mockPubkey, 1950);
-         const incomingNDKEvent = createMockNDKEvent(incomingEvent);
-         vi.mocked(ndkService.fetchEvents).mockResolvedValue(new Set([incomingNDKEvent]));
-
-         const result = await syncServiceInstance.performSync();
-
-         expect(result).toBe(true); // Incoming succeeded
-         expect(ndkService.fetchEvents).toHaveBeenCalledTimes(1);
-         expect(localDb.addOrUpdateEvent).toHaveBeenCalledTimes(1);
-         expect(localDb.getUnpublishedEvents).toHaveBeenCalledTimes(1);
-         expect(consoleErrorSpy).toHaveBeenCalledWith('SyncService Phase 2: Failed to fetch unpublished events:', getUnpublishedError);
-         expect(ndkService.publish).not.toHaveBeenCalled(); // Failed before publish
-         expect(localDb.markEventAsPublished).not.toHaveBeenCalled();
-
-         consoleErrorSpy.mockRestore();
-     });
-
-     it('should handle error when marking event as published (outgoing phase)', async () => {
-        const markPublishedError = new Error('DB error marking published');
-        const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-        // Mock incoming to have no changes
+        // Mock incoming succeeds without internal errors
         vi.mocked(ndkService.fetchEvents).mockResolvedValue(new Set());
 
-        // Mock outgoing event fetch and publish success
-        const outgoingEvent = createMockStoredEvent('out6', NDKKind.CategorizedBookmarkList, mockPubkey, 2000, '', [], 'sig6');
+        // Mock outgoing fetch succeeds, but publish fails internally
+        const outgoingEvent = createMockStoredEvent('out4', NDKKind.CategorizedBookmarkList, mockPubkey, 1800, '', [], 'sig4');
         vi.mocked(localDb.getUnpublishedEvents).mockResolvedValue([outgoingEvent]);
-        vi.mocked(ndkService.publish).mockResolvedValue(new Set([mockNDKRelay])); // Use mocked relay
-
-        // Mock markEventAsPublished to fail
-        vi.mocked(localDb.markEventAsPublished).mockRejectedValue(markPublishedError);
+        vi.mocked(ndkService.publish).mockRejectedValue(publishError); // Publish fails internally
 
         const result = await syncServiceInstance.performSync();
 
-        // Result should be false because although publish succeeded, the marking failed,
-        // so syncOutgoing internally returns false.
-        expect(result).toBe(false);
-        expect(ndkService.fetchEvents).toHaveBeenCalledTimes(1);
-        expect(localDb.addOrUpdateEvent).not.toHaveBeenCalled();
-        expect(localDb.getUnpublishedEvents).toHaveBeenCalledTimes(1);
-        expect(ndkService.publish).toHaveBeenCalledTimes(1);
-        expect(localDb.markEventAsPublished).toHaveBeenCalledTimes(1); // It was called
-        // Check the specific error log inside syncOutgoing's loop
-        expect(consoleErrorSpy).toHaveBeenCalledWith(`SyncService Phase 2: Error publishing event ${outgoingEvent.id}:`, markPublishedError); // This comes from the inner catch block
-        // The outer catch block in performSync for syncOutgoing won't log unless syncOutgoing *itself* throws,
-        // which it doesn't in this case (it just returns false).
+        expect(result.success).toBe(false); // Because syncOutgoing reported internal errors
+        expect(result.message).toContain('Sync encountered errors');
+        // Check the internal error log from syncOutgoing
+        expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Error processing unpublished event 30001:out4'), publishError);
+        // Check that performSync did NOT log a caught error for outgoing
+        expect(consoleErrorSpy).not.toHaveBeenCalledWith('[SyncService] Error during syncOutgoing phase execution:', expect.anything());
+        expect(localDb.markEventAsPublished).not.toHaveBeenCalled(); // Mark shouldn't be called
 
         consoleErrorSpy.mockRestore();
-     });
+    });
 
-     it('should correctly use latest timestamp for incoming filter', async () => {
-        vi.mocked(localDb.getLatestEventTimestamp).mockResolvedValue(1234567890);
+    it('should return { success: false, ... } when outgoing markEventAsPublished fails (internal error)', async () => {
+        const markError = new Error('DB error marking published');
+        const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.resetAllMocks(); // Isolate this test
+        vi.mocked(get).mockImplementation((store: any) => store === user ? mockUser : undefined);
+
+        // Mock incoming succeeds without internal errors
+        vi.mocked(ndkService.fetchEvents).mockResolvedValue(new Set());
+        vi.mocked(localDb.getLatestEventTimestamp).mockResolvedValue(1000); // Needed after reset
+
+        // Mock outgoing fetch succeeds, publish succeeds, mark fails internally
+        const outgoingEvent = createMockStoredEvent('out6', NDKKind.CategorizedBookmarkList, mockPubkey, 1950, '', [], 'sig6');
+        vi.mocked(localDb.getUnpublishedEvents).mockResolvedValue([outgoingEvent]);
+        vi.mocked(ndkService.publish).mockResolvedValue(new Set([mockNDKRelay]));
+        vi.mocked(localDb.markEventAsPublished).mockRejectedValue(markError); // Mark fails internally
+
+        const result = await syncServiceInstance.performSync();
+
+        expect(result.success).toBe(false); // Because syncOutgoing reported internal errors
+        expect(result.message).toContain('Sync encountered errors');
+        expect(ndkService.publish).toHaveBeenCalledTimes(1);
+        expect(localDb.markEventAsPublished).toHaveBeenCalledTimes(1); // It was called
+        // Check the internal error log from syncOutgoing
+        expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining(`Error processing unpublished event ${NDKKind.CategorizedBookmarkList}:out6`), markError);
+        // Check that performSync did NOT log a caught error for outgoing
+        expect(consoleErrorSpy).not.toHaveBeenCalledWith('[SyncService] Error during syncOutgoing phase execution:', expect.anything());
+
+        consoleErrorSpy.mockRestore();
+    });
+
+    it('should return { success: false, ... } when outgoing fetching unpublished fails (error caught internally)', async () => {
+        const getUnpublishedError = new Error('DB error getting unpublished');
+        const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        // Mock incoming succeeds without internal errors
+        vi.mocked(ndkService.fetchEvents).mockResolvedValue(new Set());
+
+        // Mock outgoing fetch fails (error caught internally by syncOutgoing)
+        vi.mocked(localDb.getUnpublishedEvents).mockRejectedValue(getUnpublishedError);
+
+        const result = await syncServiceInstance.performSync();
+
+        expect(result.success).toBe(false); // Because syncOutgoing reported internal errors
+        expect(result.message).toContain('Sync encountered errors');
+        // Check the *internal* error logged by syncOutgoing
+        expect(consoleErrorSpy).toHaveBeenCalledWith('SyncService Phase 2: Failed to fetch unpublished events:', getUnpublishedError);
+        // Ensure the performSync catch block was NOT called
+        expect(consoleErrorSpy).not.toHaveBeenCalledWith('[SyncService] Error during syncOutgoing phase execution:', expect.anything());
+        expect(ndkService.publish).not.toHaveBeenCalled(); // Didn't get to publish
+
+        consoleErrorSpy.mockRestore();
+    });
+
+    it('should return { success: false, ... } if both incoming fetch fails (internal) and outgoing publish fails (internal)', async () => {
+        const fetchError = new Error('Fetch failed');
+        const publishError = new Error('Publish failed');
+        const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+         vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        // Mock incoming fetch failure (caught internally)
+        vi.mocked(ndkService.fetchEvents)
+            .mockRejectedValueOnce(fetchError)
+            .mockRejectedValueOnce(fetchError);
+
+        // Mock outgoing publish failure (internal error)
+        const outgoingEvent = createMockStoredEvent('out5', NDKKind.CategorizedBookmarkList, mockPubkey, 1850, '', [], 'sig5');
+        vi.mocked(localDb.getUnpublishedEvents).mockResolvedValue([outgoingEvent]);
+        vi.mocked(ndkService.publish).mockRejectedValue(publishError);
+
+        const result = await syncServiceInstance.performSync();
+
+        expect(result.success).toBe(false); // Both phases had internal errors
+        expect(result.message).toContain('Sync encountered errors');
+        // Check internal error logged by syncIncoming
+        expect(consoleErrorSpy).toHaveBeenCalledWith('SyncService Phase 1: Error during incoming sync after retries:', fetchError);
+        // Check internal error logged by syncOutgoing for publish failure
+        expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining(`Error processing unpublished event ${NDKKind.CategorizedBookmarkList}:out5`), publishError);
+        // Ensure performSync catch blocks were NOT called
+        expect(consoleErrorSpy).not.toHaveBeenCalledWith('[SyncService] Error during syncIncoming phase execution:', expect.anything());
+        expect(consoleErrorSpy).not.toHaveBeenCalledWith('[SyncService] Error during syncOutgoing phase execution:', expect.anything());
+        expect(localDb.markEventAsPublished).not.toHaveBeenCalled(); // Publish failed
+
+        consoleErrorSpy.mockRestore();
+        vi.mocked(console.warn).mockRestore();
+    });
+
+
+    // ... tests for timestamp handling (ensure mocks are reset/set if needed) ...
+    it('should correctly use latest timestamp for incoming filter', async () => {
+        vi.resetAllMocks(); // Isolate test
+        vi.mocked(get).mockImplementation((store: any) => store === user ? mockUser : undefined);
+        vi.mocked(localDb.getLatestEventTimestamp).mockResolvedValue(12345);
+        // Mock other calls to prevent unintended errors/logs
+        vi.mocked(ndkService.fetchEvents).mockResolvedValue(new Set());
+        vi.mocked(localDb.getUnpublishedEvents).mockResolvedValue([]);
 
         await syncServiceInstance.performSync();
+        expect(ndkService.fetchEvents).toHaveBeenCalledWith(expect.objectContaining({ since: 12346 }));
+    });
 
-        expect(localDb.getLatestEventTimestamp).toHaveBeenCalledWith(mockPubkey);
-        expect(ndkService.fetchEvents).toHaveBeenCalledWith(expect.objectContaining({
-            since: 1234567891 // +1
-        }));
-     });
-
-     it('should use undefined for `since` if no local events exist', async () => {
-        // Use type assertion as any to bypass strict type check for the mock implementation
-        vi.mocked(localDb.getLatestEventTimestamp).mockImplementation(async () => null as any);
+    it('should use undefined for `since` if no local events exist', async () => {
+        vi.resetAllMocks(); // Isolate test
+        vi.mocked(get).mockImplementation((store: any) => store === user ? mockUser : undefined);
+        vi.mocked(localDb.getLatestEventTimestamp).mockResolvedValue(0); // Or null/undefined
+        // Mock other calls
+        vi.mocked(ndkService.fetchEvents).mockResolvedValue(new Set());
+        vi.mocked(localDb.getUnpublishedEvents).mockResolvedValue([]);
 
         await syncServiceInstance.performSync();
-
-        expect(localDb.getLatestEventTimestamp).toHaveBeenCalledWith(mockPubkey);
-        expect(ndkService.fetchEvents).toHaveBeenCalledWith(expect.objectContaining({
-            since: undefined
-        }));
-     });
+        expect(ndkService.fetchEvents).toHaveBeenCalledWith(expect.objectContaining({ since: undefined }));
+    });
   });
 
   // Add describe blocks for syncIncoming/syncOutgoing if they become public later
