@@ -38,3 +38,16 @@
 
 ---
 
+### EPIC-DISCO-AGG: Content Discovery & Aggregation
+
+**DISCO-STORY-004: Unauthenticated Public List Browse**
+
+* **As a user without logging in, I want to** enter a public identifier (npub, nip05, or hex pubkey) **so that** I can browse the public curation lists associated with that identifier in a read-only mode while still having the option to log in.
+* **AC 1:** Given I am not logged in (no active NIP-07 or NIP-46 session), when I access the application, an input field is presented to enter a Nostr identifier (npub, nip05, hex pubkey), and the standard Login buttons (NIP-07, NIP-46) are visible.
+* **AC 2:** When I enter a valid identifier and submit it, the application attempts to resolve it to a hex pubkey (NIP-05 requires a standard query).
+* **AC 3:** If the identifier is invalid or NIP-05 resolution fails, an appropriate error message is displayed, and the input field/login buttons remain available.
+* **AC 4:** Upon successful resolution to a hex pubkey, the application queries configured relays for public NIP-51 list kinds (e.g., 30001, 30003) authored by that pubkey.
+* **AC 5:** Discovered public lists for the entered identifier are displayed using the existing hierarchical tree view (`HierarchyWrapper.svelte`, `TreeNode.svelte`) [cite: 796-814, 1225-1337], replacing the initial identifier input view. The Login buttons remain visible in the header.
+* **AC 6:** While Browse public lists unauthenticated, all list modification actions (Create, Add Item, Rename, Delete Item, Delete List, Update NIP-05) are disabled or hidden. The UI clearly indicates a "Read-Only" or "Public Browse" state.
+* **AC 7:** Navigation actions within the hierarchy (Expand/Collapse, View Profile, View Event, View Resource, Aggregated Feed View) remain functional for discovered and cached content, subject to normal offline/online limitations.
+* **AC 8 (New - Login Transition):** If I click a Login button (NIP-07 or NIP-46) while in the unauthenticated browse mode, the standard authentication flow for that method is initiated. Upon successful login, the view transitions to *my own* authenticated list hierarchy, replacing the public browse view, and all standard list modification actions become available.

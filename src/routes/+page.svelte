@@ -80,6 +80,12 @@
   // State for hierarchy view toggle
   let showRootsOnly = true; // Default to showing only root lists
 
+  // --- New State for Public Browse ---
+  let publicBrowseInput: string = '';
+  let publicBrowseError: string | null = null;
+  let BrowsePublicHexkey: string | null = null; // Renamed to avoid conflict with browser keyword
+  let publicBrowseMessage: string | null = null; // New state for public browse feedback
+
   $: currentUserLists = $listHierarchy.map(node => ({ id: node.id, name: node.name })).filter(list => list.id && list.name);
 
   // Helper function to get IDs of all nested nodes
@@ -430,14 +436,15 @@
     if (!isInitial) {
       isSyncing = true;
     }
-    let refreshNeeded = false;
+    let syncResult: { success: boolean; message: string } = { success: false, message: 'Sync not performed' }; // Initialize with default
 
     try {
       console.log(`[Sync ${syncContext}] Calling syncService.performSync for ${currentUser.pubkey}...`);
 
-      refreshNeeded = await syncService.performSync(options);
+      syncResult = await syncService.performSync(options); // Assign the whole result object
+      const refreshNeeded = syncResult.success; // Extract the boolean success value
 
-      console.log(`[Sync ${syncContext}] syncService.performSync finished. Refresh needed: ${refreshNeeded}`);
+      console.log(`[Sync ${syncContext}] syncService.performSync finished. Refresh needed: ${refreshNeeded}, Message: ${syncResult.message}`);
 
       if (!isInitial && refreshNeeded) {
         console.log("Data changed during manual sync, reloading hierarchy...");
@@ -450,7 +457,7 @@
       } else if (isInitial && refreshNeeded) {
         console.log("Data changed during initial sync, refresh skipped as UI was just loaded.");
       } else {
-        console.log(`[Sync ${syncContext}] No data changes detected, refresh skipped.`);
+        console.log(`[Sync ${syncContext}] No data changes detected or reported by syncService, refresh skipped.`);
       }
 
     } catch (error) {
@@ -643,6 +650,147 @@
     // and add an 'a' tag item with the coordinate from event.detail.listCoordinate
   }
 
+  // --- New Function for Public Browse ---
+  async function handlePublicBrowse() {
+    console.log('Handling public browse button click');
+    publicBrowseError = null;
+    BrowsePublicHexkey = null;
+    const trimmedInput = publicBrowseInput.trim();
+
+    if (!trimmedInput) {
+      publicBrowseError = 'Please enter an identifier.';
+      return;
+    }
+
+    let resolvedHexkey: string | null = null;
+
+    try {
+      // 1. Check for Hex Public Key
+      if (/^[a-f0-9]{64}$/i.test(trimmedInput)) {
+        console.log('Input is a hex pubkey.');
+        resolvedHexkey = trimmedInput;
+      } else {
+        // 2. Try NIP-19 Decode
+        try {
+          const decoded = nip19.decode(trimmedInput);
+          console.log('Decoded NIP-19:', decoded);
+          if (decoded.type === 'npub') {
+            console.log('Input is an npub.');
+            resolvedHexkey = decoded.data as string;
+          } else {
+            console.log('NIP-19 type is not npub:', decoded.type);
+             // Don't set error yet, check NIP-05 next
+          }
+        } catch (nip19Error) {
+          console.log('Not a valid NIP-19 identifier:', nip19Error);
+           // Not NIP-19, proceed to check NIP-05
+        }
+
+        // 3. Check for NIP-05 if not resolved yet
+        if (!resolvedHexkey && /.+@.+\..+/.test(trimmedInput)) {
+          console.log('Input looks like a NIP-05 identifier, querying...');
+          try {
+            const profile = await nip05.queryProfile(trimmedInput);
+            if (profile?.pubkey) {
+              console.log('NIP-05 resolved to pubkey:', profile.pubkey);
+              resolvedHexkey = profile.pubkey;
+            } else {
+              console.log('NIP-05 query succeeded but returned no pubkey.');
+              publicBrowseError = `Failed to resolve NIP-05 identifier: ${trimmedInput}`;
+              return; // Stop processing
+            }
+          } catch (nip05Error) {
+            console.error('NIP-05 query failed:', nip05Error);
+            publicBrowseError = `Failed to resolve NIP-05 identifier: ${trimmedInput}. Error: ${nip05Error instanceof Error ? nip05Error.message : 'Unknown NIP-05 error'}`;
+            return; // Stop processing
+          }
+        }
+      }
+
+      // 4. Final Check and Set State
+      if (resolvedHexkey) {
+        console.log('Public browse requested for resolved pubkey:', resolvedHexkey);
+        BrowsePublicHexkey = resolvedHexkey;
+        publicBrowseError = null; // Clear previous error on success
+
+        // --> Trigger loading public lists <--
+        loadPublicLists(BrowsePublicHexkey);
+
+      } else if (!publicBrowseError) {
+        // Only set error if no other specific error was set
+        console.log('Identifier format not recognized.');
+        publicBrowseError = 'Invalid identifier format (expected npub, hex pubkey, or NIP-05).';
+      }
+
+    } catch (error) {
+      console.error('Unexpected error during public browse handling:', error);
+      publicBrowseError = `An unexpected error occurred: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  // --- New Function for Loading Public Lists ---
+  async function loadPublicLists(pubkey: string) {
+    console.log(`Loading public lists for pubkey: ${pubkey}`);
+    listHierarchy.set([]); // Clear existing hierarchy first
+    isHierarchyLoading.set(true);
+    publicBrowseMessage = null;
+
+    const listFilter: NDKFilter = {
+      authors: [pubkey],
+      kinds: [
+        NDKKind.BookmarkList, // 30001
+        NDKKind.CategorizedBookmarkList, // 30003 - If applicable, adjust as needed
+        // Add other public list kinds if necessary, e.g., 10001 for MuteList if desired publicly
+      ],
+    };
+
+    try {
+      if (!ndkService.getNdkInstance()) {
+        console.error('NDK not ready, cannot fetch public lists.');
+        throw new Error('Nostr connection not available.');
+      }
+      console.log('Fetching public lists with filter:', listFilter);
+      const fetchedListEventsSet = await ndkService.fetchEvents(listFilter);
+      console.log(`Fetched ${fetchedListEventsSet.size} public list events.`);
+
+      if (fetchedListEventsSet.size > 0) {
+        const tempStoredEvents: StoredEvent[] = Array.from(fetchedListEventsSet).map(event => ({
+          id: event.id,
+          kind: event.kind ?? 30001, // Default kind if undefined, adjust if needed
+          pubkey: event.pubkey,
+          created_at: event.created_at ?? Math.floor(Date.now() / 1000),
+          tags: event.tags,
+          content: event.content,
+          sig: event.sig ?? '',
+          // published: false, // Not strictly needed for temporary build
+        }));
+
+        console.log('Building temporary hierarchy from fetched public lists...');
+        const hierarchy = await buildHierarchy(tempStoredEvents);
+
+        if (hierarchy && hierarchy.length > 0) {
+          console.log('Public hierarchy built successfully.');
+          listHierarchy.set(hierarchy);
+        } else {
+          console.log('Hierarchy build resulted in empty list or error.');
+          listHierarchy.set([]);
+          publicBrowseMessage = 'No public lists found or could be processed for this user.';
+        }
+      } else {
+        console.log('No public list events found for this user.');
+        listHierarchy.set([]);
+        publicBrowseMessage = 'No public lists found for this user.';
+      }
+    } catch (error) {
+      console.error('Error loading public lists:', error);
+      listHierarchy.set([]);
+      publicBrowseMessage = `Error fetching lists: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    } finally {
+      isHierarchyLoading.set(false);
+      console.log('Finished loading public lists.');
+    }
+  }
+
   onMount(() => {
     if (browser) {
         if (!get(user)) {
@@ -689,9 +837,34 @@
             {/if}
           </button>
            <button class="btn btn-sm btn-secondary" on:click={handleNip46Login} disabled={isConnectingNip46}>
-             Login (NIP-46)
+             Login with NIP-46 (Remote Signer)
           </button>
         </div>
+
+        <!-- Public Browse Section -->
+        <div class="divider my-8">OR</div>
+        <div class="mt-4 flex flex-col sm:flex-row justify-center items-center space-y-2 sm:space-y-0 sm:space-x-2">
+          <div class="form-control w-full max-w-md">
+            <div class="flex space-x-2">
+              <input
+                type="text"
+                placeholder="Enter npub, hex pubkey, or NIP-05..."
+                class="input input-bordered w-full"
+                aria-label="Nostr identifier for public list browsing"
+                bind:value={publicBrowseInput}
+                on:keydown={(e) => { if (e.key === 'Enter') handlePublicBrowse(); }}
+              />
+              <button class="btn btn-outline" on:click={handlePublicBrowse}>Browse</button>
+            </div>
+             {#if publicBrowseError}
+                <label class="label">
+                  <span class="label-text-alt text-error">{publicBrowseError}</span>
+                </label>
+              {/if}
+          </div>
+        </div>
+        <!-- End Public Browse Section -->
+
       {/if}
     </div>
   </header>
@@ -779,9 +952,85 @@
         />
       {/if}
 
+    {:else if BrowsePublicHexkey}
+      <div class="mb-4">
+         <p class="text-sm italic">Browsing public lists for: <code class="text-xs">{BrowsePublicHexkey}</code></p>
+         <button class="btn btn-xs btn-ghost mt-1" on:click={() => { BrowsePublicHexkey = null; listHierarchy.set([]); publicBrowseMessage = null; publicBrowseError = null; }}>Clear Browse</button>
+      </div>
+
+      {#if $isHierarchyLoading}
+        <div class="text-center py-10">
+          <span class="loading loading-lg loading-spinner text-primary"></span>
+          <p class="mt-2">Loading public lists...</p>
+        </div>
+      {:else if $listHierarchy.length === 0}
+        <div class="text-center py-10 p-4 bg-base-100 rounded-lg shadow">
+          <p class="font-semibold">{publicBrowseMessage || 'No public lists found.'}</p>
+        </div>
+      {:else}
+        <HierarchyWrapper
+            listHierarchy={$listHierarchy}
+            nip05VerificationStates={{}}
+            isHierarchyLoading={$isHierarchyLoading}
+            isLoadingInitialLists={false}
+            currentUserPubkey={null}
+            on:viewprofile={handleViewProfile}
+            on:viewevent={handleViewEvent}
+            on:viewresource={handleViewResource}
+            on:navigatelist={handleNavigateList}
+        />
+      {/if}
     {:else}
       <div class="text-center p-8">
-        <p class="text-lg">Please log in using NIP-07 (browser extension) or NIP-46 (remote signer) to manage your Nostr lists.</p>
+        <h2 class="text-xl font-semibold mb-4">Welcome!</h2>
+        <p class="mb-6">Log in to manage your personal Nostr list hierarchies, or browse public lists below.</p>
+
+        <!-- Login Buttons -->
+        <div class="flex justify-center space-x-2 mb-6">
+           <button class="btn btn-primary" on:click={handleLogin} disabled={!browser || isConnectingNip46}>
+            {#if isConnectingNip46 && !nip46ConnectionError}
+               <span class="loading loading-spinner loading-xs"></span> Connecting...
+            {:else}
+               Login (NIP-07)
+            {/if}
+          </button>
+           <button class="btn btn-secondary" on:click={handleNip46Login} disabled={isConnectingNip46}>
+             Login with NIP-46 (Remote Signer)
+          </button>
+        </div>
+
+        <!-- Public Browse Section -->
+        <div class="divider my-8">OR BROWSE PUBLIC LISTS</div>
+        <div class="mt-4 flex flex-col items-center space-y-4">
+          <div class="form-control w-full max-w-md">
+            <div class="flex space-x-2">
+              <input
+                type="text"
+                placeholder="Enter npub, hex pubkey, or NIP-05..."
+                class="input input-bordered w-full"
+                aria-label="Nostr identifier for public list browsing"
+                bind:value={publicBrowseInput}
+                on:keydown={(e) => { if (e.key === 'Enter') handlePublicBrowse(); }}
+              />
+              <button class="btn btn-outline" on:click={handlePublicBrowse}>Browse</button>
+            </div>
+             {#if publicBrowseError}
+                <label class="label">
+                  <span class="label-text-alt text-error">{publicBrowseError}</span>
+                </label>
+              {/if}
+          </div>
+
+           <!-- Placeholder for results/loading indicator -->
+           {#if BrowsePublicHexkey}
+              <div class="mt-4 p-4 bg-base-100 rounded shadow w-full max-w-md">
+                 <p class="text-success">Resolved pubkey: <code class="text-xs break-all">{BrowsePublicHexkey}</code></p>
+                 <p class="text-sm italic mt-2">(List display coming soon...)</p>
+              </div>
+           {/if}
+        </div>
+        <!-- End Public Browse Section -->
+
       </div>
     {/if}
   </main>
