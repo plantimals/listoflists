@@ -146,6 +146,15 @@
       if (get(user)?.pubkey !== result.user.pubkey) {
         resetUserData();
       }
+
+      if (BrowsePublicHexkey) {
+          console.log('Login successful during public browse, clearing public state...');
+          BrowsePublicHexkey = null;
+          publicBrowseInput = '';
+          publicBrowseError = null;
+          publicBrowseMessage = null;
+      }
+
       user.set(result.user);
     } else {
       console.error('NIP-07 Login failed:', result.error);
@@ -195,6 +204,15 @@
         if (get(user)?.pubkey !== result.user.pubkey) {
           resetUserData();
         }
+
+        if (BrowsePublicHexkey) {
+            console.log('NIP-46 Login successful during public browse, clearing public state...');
+            BrowsePublicHexkey = null;
+            publicBrowseInput = '';
+            publicBrowseError = null;
+            publicBrowseMessage = null;
+        }
+
         user.set(result.user);
 
         const modal = document.getElementById('nip46_connect_modal') as HTMLDialogElement | null;
