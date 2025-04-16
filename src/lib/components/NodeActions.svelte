@@ -2,7 +2,7 @@
   // Imports and props will be added in subsequent steps
   import type { TreeNodeData } from '$lib/types'; // Add basic type import
   import { createEventDispatcher } from 'svelte';
-  import { Icon, PencilSquare, Trash, Plus, QueueList, ClipboardDocument } from 'svelte-hero-icons';
+  import { Icon, PencilSquare, Trash, Plus, QueueList, ClipboardDocument, EllipsisVertical } from 'svelte-hero-icons';
   import { nip19 } from 'nostr-tools'; // Import nip19 for naddrEncode
   import { tick } from 'svelte'; // For visual feedback timing
 
@@ -68,63 +68,81 @@
 </script>
 
 {#if currentUserPubkey && node.pubkey === currentUserPubkey}
-  <div class="flex items-center space-x-0.5">
-    <button
-      class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-warning disabled:text-base-content/30"
-      title="Rename List"
-      on:click|stopPropagation={() =>
-        dispatch('renamelist', { listNodeId: node.id, currentName: node.name })}
-      disabled={isEditingName || isDeleting}
-    >
-      <Icon src={PencilSquare} class="w-4 h-4" />
+  <div class="dropdown dropdown-end">
+    <button tabindex="0" class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:bg-base-200">
+      <Icon src={EllipsisVertical} class="w-4 h-4" />
     </button>
-    <button
-      class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-success disabled:text-base-content/30"
-      title="Add Item to List"
-      on:click|stopPropagation={handleAdd}
-      disabled={isDeleting}
-    >
-      <Icon src={Plus} class="w-4 h-4" />
-    </button>
-    <!-- Copy naddr Button -->
-    {#if node.kind && node.pubkey && node.dTag}
-      <button
-        class="btn btn-ghost btn-xs p-1 text-base-content/70 disabled:text-base-content/30"
-        class:hover:text-success={copyStatus === 'idle'}
-        class:text-success={copyStatus === 'copied'}
-        class:hover:text-error={copyStatus === 'error'}
-        class:text-error={copyStatus === 'error'}
-        title={copyStatus === 'copied' ? 'Copied!' : (copyStatus === 'error' ? 'Copy Failed!' : 'Copy naddr')}
-        on:click|stopPropagation={handleCopyNaddr}
-        disabled={isDeleting}
-      >
-        <Icon src={ClipboardDocument} class="w-4 h-4" />
-      </button>
-    {/if}
-    <button
-      class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-info disabled:text-base-content/30"
-      title="View Aggregated Feed"
-      on:click|stopPropagation={() => dispatch('viewfeed', { listNodeId: node.id, listName: node.name })}
-      disabled={!node.items || node.items.length === 0 || isDeleting}
-    >
-      <Icon src={QueueList} class="w-4 h-4" />
-    </button>
-    <button
-      class="btn btn-ghost btn-xs p-1 text-base-content/70 hover:text-error disabled:text-base-content/30"
-      title="Delete List"
-      on:click|stopPropagation={() =>
-        dispatch('deletelist', { listNodeId: node.id, listName: node.name })}
-      disabled={isDeleting}
-    >
-      {#if isDeleting}
-        <span class="loading loading-spinner loading-xs"></span>
-      {:else}
-        <Icon src={Trash} class="w-4 h-4" />
+    <ul tabindex="0" class="dropdown-content menu p-2 shadow bg-base-100 rounded-box w-52 z-[1]">
+      <li>
+        <button
+          class="text-sm p-2"
+          on:click|stopPropagation={() =>
+            dispatch('renamelist', { listNodeId: node.id, currentName: node.name })}
+          disabled={isEditingName || isDeleting}
+        >
+          <Icon src={PencilSquare} class="w-4 h-4 mr-2" />
+          Rename List
+        </button>
+      </li>
+      <li>
+        <button
+          class="text-sm p-2"
+          on:click|stopPropagation={handleAdd}
+          disabled={isDeleting}
+        >
+          <Icon src={Plus} class="w-4 h-4 mr-2" />
+          Add Item
+        </button>
+      </li>
+      {#if node.kind && node.pubkey && node.dTag}
+        <li>
+          <button
+            class="text-sm p-2"
+            class:text-success={copyStatus === 'copied'}
+            class:text-error={copyStatus === 'error'}
+            on:click|stopPropagation={handleCopyNaddr}
+            disabled={isDeleting}
+          >
+            <Icon src={ClipboardDocument} class="w-4 h-4 mr-2" />
+            {copyStatus === 'copied' ? 'Copied naddr!' : (copyStatus === 'error' ? 'Copy Failed!' : 'Copy naddr')}
+          </button>
+        </li>
       {/if}
-    </button>
+      <li>
+        <button
+          class="text-sm p-2"
+          on:click|stopPropagation={() => dispatch('viewfeed', { listNodeId: node.id, listName: node.name })}
+          disabled={!node.items || node.items.length === 0 || isDeleting}
+        >
+          <Icon src={QueueList} class="w-4 h-4 mr-2" />
+          View Aggregated Feed
+        </button>
+      </li>
+      <li>
+        <button
+          class="text-sm p-2 text-error"
+          on:click|stopPropagation={() =>
+            dispatch('deletelist', { listNodeId: node.id, listName: node.name })}
+          disabled={isDeleting}
+        >
+          {#if isDeleting}
+            <span class="loading loading-spinner loading-xs mr-2"></span>
+            Deleting...
+          {:else}
+            <Icon src={Trash} class="w-4 h-4 mr-2" />
+            Delete List
+          {/if}
+        </button>
+      </li>
+    </ul>
   </div>
 {/if}
 
 <style>
   /* Component-specific styles can go here */
+  /* Add focus styles for accessibility if needed */
+  /*button:focus-visible, button:focus {*/
+  /*  outline: 2px solid currentColor;*/
+  /*  outline-offset: 2px;*/
+  /*}*/
 </style> 
