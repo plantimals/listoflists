@@ -11,7 +11,7 @@
   import type { TreeNodeData, Nip05VerificationStateType } from '$lib/types';
   import { localDb, type StoredEvent } from '$lib/localDb';
   import { browser } from '$app/environment';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { writable, derived } from 'svelte/store';
   import { nip19 } from 'nostr-tools';
   import AddItemModal from '$lib/components/AddItemModal.svelte'; // Keep if needed, but might comment out usage
@@ -27,6 +27,9 @@
   import { Icon, ArrowLeft, AdjustmentsHorizontal, ListBullet } from 'svelte-hero-icons';
   import CreateListModal from '$lib/components/CreateListModal.svelte'; // Add this import
   import AggregatedFeedView from '$lib/components/AggregatedFeedView.svelte'; // Ensure this import exists
+
+  // --- Constants ---
+  const BACKGROUND_SYNC_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
   let isLoadingProfile: boolean = false;
   let isLoadingInitialLists: boolean = true;
@@ -85,6 +88,13 @@
   let publicBrowseError: string | null = null;
   let BrowsePublicHexkey: string | null = null; // Renamed to avoid conflict with browser keyword
   let publicBrowseMessage: string | null = null; // New state for public browse feedback
+
+  // --- State for Online Sync Trigger ---
+  let previousIsOnline: boolean | undefined = undefined;
+  let onlineSyncTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  // --- State for Periodic Sync ---
+  let backgroundSyncIntervalId: ReturnType<typeof setInterval> | null = null;
 
   $: currentUserLists = $listHierarchy.map(node => ({ id: node.id, name: node.name })).filter(list => list.id && list.name);
 
@@ -261,6 +271,16 @@
     showEventViewModal = false;
     viewingResourceCoordinate = null;
     showResourceViewModal = false;
+
+    // ---> Clear online sync timeout on logout/reset <-----
+    if (onlineSyncTimeoutId) {
+        clearTimeout(onlineSyncTimeoutId);
+        onlineSyncTimeoutId = null;
+        console.log('[AutoSync] Cleared pending online sync timeout due to user data reset.');
+    }
+
+    // ---> Stop periodic sync on logout/reset <-----
+    stopPeriodicSync();
   }
 
   async function loadUserProfile(pubkey: string) {
@@ -809,22 +829,107 @@
     }
   }
 
+  // --- Periodic Sync Functions ---
+  function runPeriodicSyncCheck() {
+    console.log('[PeriodicSync] Running check...');
+    const online = get(isOnline);
+    const currentUser = get(user);
+    const syncInProgress = isSyncing || isInitialSyncing; // Direct access to booleans
+
+    if (online && currentUser?.pubkey && !syncInProgress) {
+      console.log('[PeriodicSync] Conditions met. Triggering sync via syncService.performSync...');
+      // Don't await, let it run in background
+      syncService.performSync({ isInitialSync: false })
+        .then(result => {
+          console.log(`[PeriodicSync] Sync performed. Result: Success=${result.success}, Message=${result.message}`);
+          if (result.success) {
+            console.log('[PeriodicSync] Sync successful, triggering UI refresh.');
+            refreshTrigger.update(n => n + 1);
+          }
+        })
+        .catch(error => {
+          console.error('[PeriodicSync] Error during periodic sync:', error);
+        });
+    } else {
+        let reason = !online ? 'offline' : !currentUser?.pubkey ? 'no user' : syncInProgress ? 'sync already in progress' : 'unknown';
+        console.log(`[PeriodicSync] Conditions not met (${reason}). Sync skipped.`);
+    }
+  }
+
+  function startPeriodicSync() {
+    if (backgroundSyncIntervalId !== null) {
+      console.log('[PeriodicSync] Interval already running. Skipping start.');
+      return; // Already started
+    }
+    console.log(`[PeriodicSync] Starting periodic sync interval (${BACKGROUND_SYNC_INTERVAL_MS}ms)...`);
+    // Run the check immediately first?
+    // runPeriodicSyncCheck(); // Optional: Run once immediately on start
+    backgroundSyncIntervalId = setInterval(runPeriodicSyncCheck, BACKGROUND_SYNC_INTERVAL_MS);
+  }
+
+  function stopPeriodicSync() {
+    if (backgroundSyncIntervalId !== null) {
+      console.log('[PeriodicSync] Stopping periodic sync interval.');
+      clearInterval(backgroundSyncIntervalId);
+      backgroundSyncIntervalId = null;
+    } else {
+        // console.log('[PeriodicSync] Interval not running. Skipping stop.');
+    }
+  }
+
+  // --- Reactive Block for Online Status Change Sync Trigger (Modified) ---
+  $: {
+    if (browser) { // Only run in browser
+        const currentIsOnline = $isOnline;
+
+        if (previousIsOnline === false && currentIsOnline === true) {
+            console.log('[AutoSync] Detected transition to ONLINE status.');
+            // ---> Start periodic sync when coming online <-----
+            startPeriodicSync();
+
+            // Keep existing logic for immediate sync after cooldown
+            const currentUser = get(user);
+            const syncInProgress = isSyncing || isInitialSyncing;
+            if (currentUser?.pubkey && !syncInProgress) {
+              // ... (existing online sync timeout logic) ...
+            }
+             // ... (existing logging for else conditions) ...
+        } else if (previousIsOnline === true && currentIsOnline === false) {
+             console.log('[AutoSync] Detected transition to OFFLINE status.');
+              // ---> Stop periodic sync when going offline <-----
+             stopPeriodicSync();
+
+             // Keep existing logic to clear immediate sync timeout
+             if (onlineSyncTimeoutId) {
+                // ... (existing timeout clearing logic) ...
+             }
+        }
+        previousIsOnline = currentIsOnline;
+    }
+  }
+
   onMount(() => {
     if (browser) {
-        if (!get(user)) {
-            console.log('Checking for existing NIP-07 signer on mount...');
-            ndkService.activateNip07Signer().then(result => {
-                if (result.success && result.user && !get(user)) {
-                  console.log('Found and activated existing NIP-07 signer on mount.');
-                  user.set(result.user);
-                } else if (!result.success && !get(user)) {
-                  console.log('No active NIP-07 signer found on mount or activation failed:', result.error);
-                }
-            });
-        } else {
-             console.log('User already exists on mount, ensuring data load is triggered...');
+        previousIsOnline = get(isOnline); // Initialize with current state
+        console.log(`[AutoSync] Initial online state onMount: ${previousIsOnline}`);
+
+        // ---> Start periodic sync on mount ONLY if initially online <-----
+        if (previousIsOnline) {
+            startPeriodicSync();
         }
+
+        // ... existing NIP-07 check ...
     }
+  });
+
+  // --- Modified onDestroy hook for cleanup ---
+  onDestroy(() => {
+    if (onlineSyncTimeoutId) {
+      clearTimeout(onlineSyncTimeoutId);
+      console.log('[AutoSync] Cleared pending online sync timeout on component destroy.');
+    }
+    // ---> Stop periodic sync on destroy <-----
+    stopPeriodicSync();
   });
 
 </script>

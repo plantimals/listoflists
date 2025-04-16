@@ -36,3 +36,24 @@
 
 ---
 
+EPIC-AUTH-SIGN: Authentication & Signing
+
+AUTH-STORY-004: Persist NIP-46 Bunker Session Across Page Loads
+
+    As a user who logged in via a NIP-46 bunker:// URI, I want the application to remember my connection details and attempt to reconnect automatically when I reload the page so that I don't have to manually re-enter my connection string every time [cite: FR-01].
+    AC 1: Given I successfully log in using a NIP-46 connection string identified as safe for storage (specifically, starting with bunker://), the connection string used is saved to the browser's localStorage under a predefined key (e.g., nip46BunkerConnectionString). Connection strings starting with nostrconnect:// (which contain secrets) MUST NOT be saved.
+    AC 2: When the application loads (onMount in +page.svelte), it checks localStorage for a saved NIP-46 bunker connection string before attempting any NIP-07 auto-login.
+    AC 3: If a bunker:// connection string is found in localStorage:
+        The application automatically attempts to re-establish the connection by calling ndkService.activateNip46Signer with the stored string.
+        A visual indicator (e.g., "Attempting NIP-46 reconnect...") is shown during the attempt.
+    AC 4: If the automatic reconnection attempt (AC 3) using the stored bunker:// string is successful:
+        The user state ($user store) is set with the retrieved NDKUser.
+        The application proceeds to load the user's data as if they had manually logged in.
+        The connection string remains in localStorage for subsequent reloads.
+    AC 5: If the automatic reconnection attempt (AC 3) fails (e.g., timeout, connection refused by signer, invalid stored string):
+        An appropriate, non-blocking message is logged or briefly shown (e.g., "Failed to auto-reconnect NIP-46 signer. Please log in manually.").
+        The invalid/failed connection string is cleared from localStorage.
+        The application presents the standard manual login options (NIP-07 / NIP-46 buttons, public browse input).
+    AC 6: When I explicitly click the "Logout" button:
+        Any active NIP-46 signer is disconnected via ndkService.disconnectSigner().
+        Any saved NIP-46 bunker connection string is cleared from localStorage.
