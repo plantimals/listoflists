@@ -1,15 +1,20 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, createEventDispatcher } from 'svelte';
   import { localDb, type StoredEvent } from '$lib/localDb';
   import { ndkService } from '$lib/ndkService';
   import { NDKKind, type NDKUserProfile, type NDKEvent, type NDKTag } from '@nostr-dev-kit/ndk';
   import { nip19 } from 'nostr-tools';
-  import { Icon, ClipboardDocument } from 'svelte-hero-icons';
+  import { Icon, ClipboardDocument, ArrowUpRight, UserCircle, DocumentText, CircleStack } from 'svelte-hero-icons';
   import SelectListModal from './SelectListModal.svelte';
   import { addItemToList } from '$lib/listService';
+  import TreeNode from './TreeNode.svelte';
+  import type { TreeNodeData, Nip05VerificationStateType } from '$lib/types';
+  import { transformStoredEventToNode } from '$lib/hierarchyService';
 
   export let npub: string;
   export let currentUserLists: Array<{ id: string, name: string }> = [];
+
+  const dispatch = createEventDispatcher();
 
   // Profile State
   let profileData: NDKUserProfile | null = null;
@@ -17,9 +22,9 @@
   let profileError: string | null = null;
 
   // Public List State
-  let publicLists: Array<{ name: string, naddr: string, kind: number }> = [];
   let isLoadingLists = false;
   let listError: string | null = null;
+  let discoveredListsRoot: TreeNodeData | null = null;
 
   // Derived State
   let hexPubkey: string | null = null;
@@ -33,25 +38,21 @@
 
   $: {
     try {
-      // Reset state when npub changes before decoding
       hexPubkey = null;
       profileData = null;
-      publicLists = [];
+      discoveredListsRoot = null;
       isLoadingProfile = true;
       isLoadingLists = false;
       profileError = null;
       listError = null;
 
       hexPubkey = nip19.decode(npub).data as string;
-      console.log(`ProfileView: Decoded npub ${npub} to hex ${hexPubkey}`);
-      // Trigger fetches after successful decode
       fetchProfile();
     } catch (e) {
-      console.error(`ProfileView: Failed to decode npub ${npub}`, e);
       hexPubkey = null;
       profileError = 'Invalid user identifier (npub).';
       isLoadingProfile = false;
-      isLoadingLists = false; // Ensure list loading stops if npub invalid
+      isLoadingLists = false;
     }
   }
 
@@ -60,40 +61,29 @@
       profileError = 'Cannot fetch profile: Invalid user identifier.';
       isLoadingProfile = false;
       profileData = null;
-      isLoadingLists = false; // Don't attempt list fetch if profile fails early
+      isLoadingLists = false;
       return;
     }
 
-    console.log(`ProfileView: Fetching profile for hex: ${hexPubkey}`);
     isLoadingProfile = true;
     profileError = null;
     profileData = null;
-    // Reset list state too, as it depends on profile fetch success
     isLoadingLists = false;
     listError = null;
-    publicLists = [];
+    discoveredListsRoot = null;
 
     try {
-      // 1. Local Check
       const localProfile = await localDb.getProfile(hexPubkey);
       if (localProfile?.profile) {
-        console.log(`ProfileView: Found profile locally for ${hexPubkey}`);
         profileData = localProfile.profile as NDKUserProfile;
-        // Proceed to fetch lists after successful profile load
         fetchPublicLists();
       } else {
-        // 2. Network Fetch
-        console.log(`ProfileView: Profile not found locally for ${hexPubkey}, fetching from network...`);
         const filter = { kinds: [NDKKind.Metadata], authors: [hexPubkey], limit: 1 };
         const fetchedEvent: NDKEvent | null = await ndkService.fetchEvent(filter);
 
         if (fetchedEvent) {
-          console.log(`ProfileView: Fetched profile event from network for ${hexPubkey}`);
           try {
             profileData = JSON.parse(fetchedEvent.content);
-            console.log(`ProfileView: Parsed profile data for ${hexPubkey}`, profileData);
-
-            // Save to local DB
             const storedEventData: StoredEvent = {
               id: fetchedEvent.id,
               kind: fetchedEvent.kind,
@@ -104,26 +94,20 @@
               sig: fetchedEvent.sig ?? ''
             };
             await localDb.addOrUpdateProfile(storedEventData);
-            console.log(`ProfileView: Saved fetched profile to local DB for ${hexPubkey}`);
-            // Proceed to fetch lists after successful profile load and save
             fetchPublicLists();
           } catch (parseError) {
-            console.error(`ProfileView: Failed to parse profile content for ${hexPubkey}:`, parseError);
             profileError = 'Failed to parse profile data from network.';
-            profileData = null; // Clear potentially partial data
+            profileData = null;
           }
         } else {
-          console.log(`ProfileView: No profile event found on network for ${hexPubkey}`);
           profileError = 'Profile metadata (Kind 0) not found on network.';
         }
       }
     } catch (err: any) {
-      console.error(`ProfileView: Error fetching profile for ${hexPubkey}:`, err);
       profileError = `Failed to load profile: ${err.message || 'Unknown error'}`;
       profileData = null;
     } finally {
       isLoadingProfile = false;
-      // Do not set isLoadingLists here, fetchPublicLists handles its own loading state
     }
   }
 
@@ -131,147 +115,141 @@
     if (!hexPubkey) {
       listError = 'Cannot fetch lists: Invalid user identifier.';
       isLoadingLists = false;
-      publicLists = [];
+      discoveredListsRoot = null;
       return;
     }
 
-    console.log(`ProfileView: Fetching public lists for hex: ${hexPubkey}`);
     isLoadingLists = true;
     listError = null;
-    publicLists = [];
+    discoveredListsRoot = null;
 
     try {
-      const listKinds = [30001, 30003]; // Kinds for NIP-51 lists (Bookmarks, Highlights)
+      const listKinds = [30001, 30003];
       const filter = { kinds: listKinds, authors: [hexPubkey] };
       const fetchedListEvents = await ndkService.fetchEvents(filter);
-
+      
+      // --- Store fetched events locally --- START
       if (fetchedListEvents.size > 0) {
-        console.log(`ProfileView: Found ${fetchedListEvents.size} potential public list events for ${hexPubkey}`);
-        const processedLists = new Map<string, { name: string, naddr: string, kind: number }>();
-
-        for (const event of fetchedListEvents) {
-          const dTag = event.tags.find((t: NDKTag) => t[0] === 'd');
-          if (!dTag || !dTag[1]) continue; // Skip if no dTag identifier
-
-          const dTagValue = dTag[1];
-          const titleTag = event.tags.find((t: NDKTag) => t[0] === 'title');
-
-          const name = titleTag?.[1] || dTagValue || `Kind ${event.kind} List`;
-          const kind = event.kind;
-          const pubkey = event.pubkey;
-
-          // Construct naddr
-          try {
-            const naddr = nip19.naddrEncode({ identifier: dTagValue, pubkey: pubkey, kind: kind });
-            // Use naddr as the key to avoid duplicates if multiple events define the same list
-            if (!processedLists.has(naddr)) {
-              processedLists.set(naddr, { name, naddr, kind });
-            }
-          } catch (encodeError) {
-            console.error(`ProfileView: Failed to encode naddr for event ${event.id}:`, encodeError);
+          const storePromises: Promise<void>[] = [];
+          for (const event of fetchedListEvents) {
+              const storedEventData: StoredEvent = {
+                  id: event.id,
+                  kind: event.kind,
+                  pubkey: event.pubkey,
+                  created_at: event.created_at ?? 0,
+                  tags: event.tags,
+                  content: event.content,
+                  sig: event.sig ?? '',
+                  published: true
+              };
+              storePromises.push(localDb.addOrUpdateEvent(storedEventData));
           }
-        }
-        publicLists = Array.from(processedLists.values());
-        console.log(`ProfileView: Processed public lists for ${hexPubkey}:`, publicLists);
-
-      } else {
-        console.log(`ProfileView: No public list events (kinds ${listKinds.join(', ')}) found for ${hexPubkey}`);
-        publicLists = [];
+          await Promise.all(storePromises);
+          console.log(`ProfileView: Stored ${fetchedListEvents.size} fetched public list events locally.`);
       }
+      // --- Store fetched events locally --- END
+      
+      // --- Retrieve latest lists from local DB --- START
+      const localUserLists = await localDb.getUsersNip51Lists(hexPubkey);
+      console.log(`ProfileView: Retrieved ${localUserLists.length} NIP-51 lists for ${hexPubkey} from local DB.`);
+      // --- Retrieve latest lists from local DB --- END
+      
+      const rootNode: TreeNodeData = {
+          id: `discovered-root-${hexPubkey}`,
+          name: 'Discovered Public Lists',
+          kind: -1,
+          children: [],
+          items: [],
+          isSyntheticRoot: true,
+          pubkey: hexPubkey,
+          isExpanded: true
+      };
+
+      // --- Transform stored events to nodes --- START
+      rootNode.children = localUserLists.map(storedEvent => {
+          const node = transformStoredEventToNode(storedEvent);
+          node.isDiscoveredList = true; // Mark as discovered for UI/handling
+
+          // Ensure the ID used is the naddr for linking purposes, checking for defined kind, dTag, and pubkey
+          if (node.dTag && node.pubkey && typeof node.kind === 'number' && node.kind >= 30000 && node.kind < 40000) {
+              try {
+                  // Now safe to use node.dTag, node.pubkey and node.kind
+                  node.id = nip19.naddrEncode({ identifier: node.dTag, pubkey: node.pubkey, kind: node.kind });
+              } catch (e) {
+                  console.error(`Failed to encode naddr for discovered list: ${node.kind}:${node.pubkey}:${node.dTag}`, e);
+                  // Keep the original ID (likely event ID) if encoding fails
+              }
+          }
+          return node;
+      });
+      // --- Transform stored events to nodes --- END
+
+      discoveredListsRoot = rootNode;
+
     } catch (err: any) {
-      console.error(`ProfileView: Error fetching public lists for ${hexPubkey}:`, err);
       listError = `Failed to load public lists: ${err.message || 'Unknown error'}`;
-      publicLists = [];
+      discoveredListsRoot = null;
     } finally {
       isLoadingLists = false;
     }
   }
 
-  // Add the copyNaddr function
-  async function copyNaddr(naddr: string) {
-      if (!navigator.clipboard) {
-          console.error('Clipboard API not available');
-          // Optionally show an error message to the user
-          return;
-      }
-      try {
-          await navigator.clipboard.writeText(naddr);
-          console.log('Copied naddr to clipboard:', naddr);
-          // Optional: Add brief visual feedback (e.g., change button text/icon temporarily)
-      } catch (err) {
-          console.error('Failed to copy naddr:', err);
-          // Optionally show an error message to the user
-      }
+  function handleAddLinkClick(event: CustomEvent<{ naddr: string }>) {
+      listToAddNaddr = event.detail.naddr;
+      addLinkError = null;
+      addLinkSuccessMessage = null;
+      showSelectListModal = true;
   }
 
-  // Add the new handler function
-  function handleAddLinkClick(naddr: string) {
-      console.log(`ProfileView: Add Link clicked for naddr: ${naddr}`);
-      listToAddNaddr = naddr;
-      addLinkError = null; // Clear previous errors
-      addLinkSuccessMessage = null; // <-- Clear previous success message
-      showSelectListModal = true; // Set flag to show the modal
-      // The reactive binding in the SelectListModal component should handle opening it
-  }
-
-  // Handler for when the modal confirms a selection
   async function handleListSelected(event: CustomEvent<{ destinationListId: string }>) {
       const { destinationListId } = event.detail;
-      console.log(`ProfileView: Received listselected event for destination ID: ${destinationListId}`);
 
       if (!listToAddNaddr || !destinationListId) {
           addLinkError = 'Error: Missing information to add the link.';
-          addLinkSuccessMessage = null; // Ensure success is null on early exit
-          console.error(addLinkError, { listToAddNaddr, destinationListId });
+          addLinkSuccessMessage = null;
           return;
       }
 
-      isAddingLink = true; // Set loading state for the overall add link process
+      isAddingLink = true;
       addLinkError = null;
-      addLinkSuccessMessage = null; // Clear messages at start of attempt
+      addLinkSuccessMessage = null;
 
       try {
-          console.log(`ProfileView: Calling addItemToList - Destination: ${destinationListId}, Item naddr: ${listToAddNaddr}`);
-          // Call the existing list service function
           const result = await addItemToList(destinationListId, listToAddNaddr);
 
           if (result.success) {
-              console.log(`ProfileView: Successfully added link ${listToAddNaddr} to list ${destinationListId}. New event ID: ${result.newEventId}`);
-
-              // Find the destination list name for the message
               const destinationListName = currentUserLists.find(l => l.id === destinationListId)?.name || destinationListId;
-
-              addLinkSuccessMessage = `Link added to list '${destinationListName}'!`; // Set success message
-              addLinkError = null; // Explicitly clear error on success
-
-              // Clear the message after a delay
-              setTimeout(() => {
-                  addLinkSuccessMessage = null;
-              }, 3000); // Display for 3 seconds
-
+              addLinkSuccessMessage = `Link added to list '${destinationListName}'!`;
+              addLinkError = null;
+              setTimeout(() => { addLinkSuccessMessage = null; }, 3000);
           } else {
-              console.error(`ProfileView: Failed to add link ${listToAddNaddr} to list ${destinationListId}:`, result.error);
               addLinkError = result.error || 'Failed to add link to the selected list.';
-              addLinkSuccessMessage = null; // Ensure success message is clear on error
+              addLinkSuccessMessage = null;
           }
       } catch (err: any) {
-          console.error('ProfileView: Unexpected error in handleListSelected:', err);
           addLinkError = `An unexpected error occurred: ${err.message}`;
-          addLinkSuccessMessage = null; // Clear success message on catch
+          addLinkSuccessMessage = null;
       } finally {
           isAddingLink = false;
-          // We keep listToAddNaddr set so the spinner on the specific button remains
-          // until the user interacts elsewhere or the component re-renders.
-          // Consider resetting listToAddNaddr = null here or perhaps after a short delay
-          // or when the modal fully closes.
       }
   }
 
-  onMount(() => {
-    // Initial fetch is triggered by the reactive block `$: { ... }` after npub is decoded
-  });
+  function forwardViewEvent(event: CustomEvent<{ eventId: string }>) {
+      dispatch('viewevent', event.detail);
+  }
+  function forwardViewProfile(event: CustomEvent<{ npub: string }>) {
+      dispatch('viewprofile', event.detail);
+  }
+  function forwardViewResource(event: CustomEvent<{ coordinate: string }>) {
+      dispatch('viewresource', event.detail);
+  }
+  function forwardCheckNip05(event: CustomEvent<{ identifier: string, node: TreeNodeData }>) {
+      dispatch('checknip05', event.detail);
+  }
 
-  // Reactive statement to handle npub changes AFTER initial mount is now handled by the main $: block
+  onMount(() => {
+    // Initial fetch triggered by reactive block
+  });
 
 </script>
 
@@ -284,19 +262,17 @@
   <div class="alert alert-error">
     <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2 2m2-2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
     <span>Error! {profileError}</span>
-    {#if listError && !isLoadingLists} <!-- Show list error if profile also errored -->
+    {#if listError && !isLoadingLists}
        <span class="text-sm mt-1">Additionally: {listError}</span>
     {/if}
   </div>
 {:else if profileData}
-  <!-- Profile Found and Loaded -->
   <div class="space-y-4">
     <!-- Profile Details -->
     <div class="card card-bordered bg-base-200 p-4 space-y-2">
       <div class="flex items-center space-x-4">
         <div class="avatar">
           {#if profileData.picture}
-            {@const _ = console.log('Avatar URL:', profileData.picture)}
             <div class="w-16 rounded-full ring ring-primary ring-offset-base-100 ring-offset-2">
               <img
                 src={profileData.picture}
@@ -314,22 +290,26 @@
         <div>
           <h2 class="card-title">{profileData.displayName || profileData.name || '(Name not set)'}</h2>
           <code class="text-sm text-base-content/70 break-all">{npub}</code>
+          {#if profileData.website}
+             <a href={profileData.website} target="_blank" rel="noopener noreferrer" class="text-sm text-blue-500 hover:underline flex items-center">
+                {profileData.website}
+                <Icon src={ArrowUpRight} class="w-3 h-3 ml-1"/>
+             </a>
+          {/if}
         </div>
       </div>
       {#if profileData.about}
-        <p class="text-base-content/90 pt-2 border-t border-base-300/50">{profileData.about}</p>
+        <p class="text-base-content/90 pt-2 border-t border-base-300/50 whitespace-pre-wrap">{profileData.about}</p>
       {/if}
     </div>
 
-    <!-- Display Add Link Success Message -->
+    <!-- Display Add Link Success/Error -->
     {#if addLinkSuccessMessage}
       <div class="alert alert-success mt-4">
         <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
         <span>{addLinkSuccessMessage}</span>
       </div>
     {/if}
-
-    <!-- Display Add Link Error -->
     {#if addLinkError}
       <div class="alert alert-error mt-4">
         <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2 2m2-2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
@@ -343,56 +323,43 @@
       {#if isLoadingLists}
         <div class="flex items-center justify-center space-x-2 py-4">
           <span class="loading loading-spinner text-primary"></span>
-          <span>Loading Lists...</span>
+          <span>Loading List Index...</span>
         </div>
       {:else if listError}
         <div class="alert alert-warning text-sm p-2">
           <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
           <span>Could not load lists: {listError}</span>
         </div>
-      {:else if publicLists.length > 0}
-        <ul class="space-y-1">
-          {#each publicLists as list (list.naddr)}
-            <li class="flex items-center justify-between p-2 rounded hover:bg-base-200/50">
-              <span class="truncate mr-2" title={list.name}>{list.name} <span class="text-xs opacity-60">(Kind {list.kind})</span></span>
-              <div class="flex items-center space-x-1 flex-shrink-0">
-                 <button
-                    class="btn btn-xs btn-ghost btn-square"
-                    on:click={() => copyNaddr(list.naddr)}
-                    title="Copy List Address (naddr)">
-                    <Icon src={ClipboardDocument} class="w-4 h-4"/>
-                 </button>
-                 <button
-                    class="btn btn-xs btn-outline btn-primary"
-                    on:click={() => handleAddLinkClick(list.naddr)}
-                    title={`Add link to list: ${list.name}`}
-                    disabled={isAddingLink}
-                 >
-                    {#if isAddingLink && listToAddNaddr === list.naddr}
-                       <span class="loading loading-spinner loading-xs"></span>
-                    {:else}
-                       Add Link
-                    {/if}
-                 </button>
-              </div>
-            </li>
+      {:else if discoveredListsRoot && discoveredListsRoot.children.length > 0}
+        <div class="mt-4 pt-4 border-t border-base-300">
+          <h3 class="text-lg font-semibold mb-2">Public Lists by this User</h3>
+          {#each discoveredListsRoot.children as listNode (listNode.id)}
+            <TreeNode
+              node={listNode}
+              depth={0}
+              verificationStates={{}}
+              on:addlink={handleAddLinkClick}
+              on:viewprofile={(e) => dispatch('viewprofile', e.detail)}
+              on:viewevent={(e) => dispatch('viewevent', e.detail)}
+              on:viewresource={(e) => dispatch('viewresource', e.detail)}
+              on:viewlist={(e) => dispatch('viewlist', e.detail)}
+              on:error={(e) => dispatch('error', e.detail)}
+            />
           {/each}
-        </ul>
+        </div>
       {:else}
         <p class="text-base-content/70 italic">No public lists found for this user.</p>
       {/if}
     </div>
   </div>
 {:else}
-  <!-- Profile not found (but no specific error occurred) -->
-   <div class="alert alert-warning">
+  <div class="alert alert-warning">
     <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
     <span>Profile data could not be loaded or found for this user.</span>
-     {#if listError && !isLoadingLists} <!-- Show list error if profile failed but list check ran -->
+     {#if listError && !isLoadingLists}
        <span class="text-sm mt-1">List Check: {listError}</span>
     {/if}
   </div>
 {/if}
 
-<!-- Add the Modal Instance -->
 <SelectListModal bind:open={showSelectListModal} userLists={currentUserLists} on:listselected={handleListSelected} /> 

@@ -965,7 +965,6 @@
         </div>
 
         <!-- Public Browse Section -->
-        <div class="divider my-8">OR</div>
         <div class="mt-4 flex flex-col sm:flex-row justify-center items-center space-y-2 sm:space-y-0 sm:space-x-2">
           <div class="form-control w-full max-w-md">
             <div class="flex space-x-2">
@@ -1106,24 +1105,9 @@
     {:else}
       <div class="text-center p-8">
         <h2 class="text-xl font-semibold mb-4">Welcome!</h2>
-        <p class="mb-6">Log in to manage your personal Nostr list hierarchies, or browse public lists below.</p>
-
-        <!-- Login Buttons -->
-        <div class="flex justify-center space-x-2 mb-6">
-           <button class="btn btn-primary" on:click={handleLogin} disabled={!browser || isConnectingNip46}>
-            {#if isConnectingNip46 && !nip46ConnectionError}
-               <span class="loading loading-spinner loading-xs"></span> Connecting...
-            {:else}
-               Login (NIP-07)
-            {/if}
-          </button>
-           <button class="btn btn-secondary" on:click={handleNip46Login} disabled={isConnectingNip46}>
-             Login with NIP-46 (Remote Signer)
-          </button>
-        </div>
+        <p class="mb-6">Log in via the header to manage your personal Nostr list hierarchies, or browse public lists.</p>
 
         <!-- Public Browse Section -->
-        <div class="divider my-8">OR BROWSE PUBLIC LISTS</div>
         <div class="mt-4 flex flex-col items-center space-y-4">
           <div class="form-control w-full max-w-md">
             <div class="flex space-x-2">

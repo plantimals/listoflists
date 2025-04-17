@@ -26,6 +26,7 @@
     export let depth: number = 0; // Use depth
     export let verificationStates: { [id: string]: Nip05VerificationStateType }; // <-- Use the imported type
     export let currentUserPubkey: string | null = null; // Added prop
+    export let showAddLinkButtonForDiscover = false;
 
     let expanded: boolean = false; // State for expand/collapse
     let isAdding: boolean = false;
@@ -51,8 +52,8 @@
     // Reference to the modal component instance - Removed
     // let addItemModalInstance: AddItemModal;
 
-    // Reactive check for external list
-    $: isExternalList = !!(currentUserPubkey && node.pubkey && node.pubkey !== currentUserPubkey);
+    // Corrected reactive check for external list
+    $: isExternalList = node.pubkey !== currentUserPubkey;
 
     // Function to load items for external lists
     async function loadExternalItems() {
@@ -284,29 +285,26 @@
     {node} 
     {depth} 
     currentUserPubkey={currentUserPubkey}
-    bind:isExpanded={expanded} 
-    on:toggle={toggleExpand}
+    expanded={expanded}  
+    on:toggle={toggleExpand} 
     bind:isEditingName={isEditingName}
     bind:editedName={editedName}
     bind:inputRef={inputRef} 
     on:submitname={handleSubmitName}
     on:canceledit={handleCancelEdit}
     on:startedit={handleStartEdit}
+    {showAddLinkButtonForDiscover}
 >
-    <svelte:fragment slot="actions">
+    <!-- Pass node actions through a slot -->
+    <div slot="actions">
         <NodeActions
             {node}
             currentUserPubkey={currentUserPubkey}
-            isOnline={$isOnline}
-            bind:isDeleting={isDeleting} 
-            bind:isEditingName={isEditingName}
-            isRootNode={depth === 0}
-            on:additem={openAddItemModal}       
-            on:deletelist={handleDeleteList}    
-            on:renamelist={openRenameModal}     
-            on:viewfeed={forwardViewFeed}      
+            on:viewprofile
+            on:viewevent
+            on:viewresource
         />
-    </svelte:fragment>
+    </div>
 </NodeHeader>
 
 <!-- Render Items OR External List Content when Expanded -->
@@ -392,6 +390,7 @@
           on:navigatelist
           on:viewresource
           on:checknip05
+          {showAddLinkButtonForDiscover}
       />
     {/each}
   </div>

@@ -27,6 +27,11 @@
   $: indent = depth * 1.5; // 1.5rem per depth level
   $: isExternal = !!(currentUserPubkey && node.pubkey && node.pubkey !== currentUserPubkey);
 
+  // Reactive declaration for expandability
+  $: isExpandableList = 
+    [30000, 10000, 30001, 10001].includes(node.kind ?? -1) && 
+    ((node.items && node.items.length > 0) || (node.children && node.children.length > 0));
+
   console.log('Component initialized:', 'NodeHeader');
 
   // Local state/handlers needed by the header (e.g., isDeleting if handleDeleteList moves here)
@@ -64,16 +69,17 @@
         class="flex items-center space-x-2 flex-grow min-w-0 text-left" 
         on:click={handleNodeClick}
     >
-        {#if (node.children && node.children.length > 0) || (node.items && node.items.length > 0)}
+        {#if isExpandableList}
             <!-- Changed inner button to a span, removed click handler -->
             <span
                 class="btn btn-ghost btn-xs p-0 -ml-1 text-base-content/50 hover:text-base-content"
-                title={isExpanded ? 'Collapse' : 'Expand'} 
+                title={isExpanded ? 'Collapse' : 'Expand'}
             >
                 <Icon src={isExpanded ? ChevronDown : ChevronRight} class="w-4 h-4" />
             </span>
-        {:else}
-            <span class="w-4 h-4 inline-block"></span> 
+        {:else if node.kind !== 30001}
+            <!-- Placeholder for non-lists or empty lists -->
+            <span class="w-4 h-4 inline-block"></span>
         {/if}
 
         {#if isEditingName}
